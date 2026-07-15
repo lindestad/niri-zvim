@@ -1,0 +1,17 @@
+[package]
+name = "niri-zvim-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+serde.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+criterion = "0.8.2"
+serde_json.workspace = true
+
+[[bench]]
+name = "routing"
+harness = false
