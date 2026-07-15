@@ -54,12 +54,12 @@ fi
 
 if command -v systemctl >/dev/null; then
   systemctl --user daemon-reload
-  systemctl --user enable --now niri-zvim.service
+  systemctl --user enable niri-zvim.service
+  systemctl --user restart niri-zvim.service
   if systemctl --user cat app-com.mitchellh.ghostty.service >/dev/null 2>&1; then
     systemctl --user enable app-com.mitchellh.ghostty.service
   fi
 fi
 
 echo "Installed niri-zvim."
-echo "Before the first Zellij use, run this inside any Zellij session and approve the prompt:"
-echo "  zellij action launch-or-focus-plugin --floating file:$zellij_plugin_dir/niri-zvim.wasm"
+echo "Approve the niri-zvim permission prompt when it first appears in Zellij."

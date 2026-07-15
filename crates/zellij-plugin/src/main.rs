@@ -5,12 +5,15 @@ use niri_zvim_core::{
     directional_neighbors,
 };
 use zellij_tile::prelude::{
-    Direction as ZellijDirection, Event, EventType, PaneId as ZellijPaneId, PaneManifest,
-    PermissionStatus, PermissionType, PipeMessage, PipeSource, ZellijPlugin, block_cli_pipe_input,
-    cli_pipe_output, get_focused_pane_info, get_plugin_ids, get_session_environment_variables,
-    get_session_list, hide_self, move_focus, register_plugin, report_panic, request_permission,
-    set_selectable, subscribe, unblock_cli_pipe_input,
+    Direction as ZellijDirection, Event, EventType, PaneManifest, PermissionStatus, PermissionType,
+    PipeMessage, PipeSource, ZellijPlugin, block_cli_pipe_input, cli_pipe_output,
+    get_focused_pane_info, get_plugin_ids, get_session_environment_variables, get_session_list,
+    hide_self, move_focus, register_plugin, report_panic, request_permission, set_selectable,
+    set_timeout, subscribe, unblock_cli_pipe_input,
 };
+
+const PUBLISH_RETRY_INTERVAL_SECONDS: f64 = 0.05;
+const MAX_PUBLISH_RETRIES: u8 = 20;
 
 #[derive(Default)]
 struct Plugin {
@@ -20,6 +23,10 @@ struct Plugin {
     revision: u64,
     pipe_id: Option<String>,
     input: String,
+    publish_retries: u8,
+    publish_retry_pending: bool,
+    active_tab: Option<usize>,
+    pane_manifest: Option<PaneManifest>,
 }
 
 register_plugin!(Plugin);
@@ -27,7 +34,14 @@ register_plugin!(Plugin);
 impl ZellijPlugin for Plugin {
     fn load(&mut self, _configuration: BTreeMap<String, String>) {
         self.client_id = get_plugin_ids().client_id;
-        subscribe(&[EventType::PermissionRequestResult]);
+        subscribe(&[
+            EventType::PermissionRequestResult,
+            EventType::Timer,
+            EventType::ModeUpdate,
+            EventType::TabUpdate,
+            EventType::PaneUpdate,
+            EventType::BeforeClose,
+        ]);
         request_permission(&[
             PermissionType::ReadApplicationState,
             PermissionType::ChangeApplicationState,
@@ -40,21 +54,27 @@ impl ZellijPlugin for Plugin {
         match event {
             Event::PermissionRequestResult(PermissionStatus::Granted) => {
                 self.session = get_session_environment_variables().remove("ZELLIJ_SESSION_NAME");
-                subscribe(&[
-                    EventType::ModeUpdate,
-                    EventType::PaneUpdate,
-                    EventType::BeforeClose,
-                ]);
                 set_selectable(false);
                 hide_self();
+                self.state_changed();
             }
             Event::ModeUpdate(mode) => {
                 self.session = mode.session_name;
-                self.publish();
+                self.state_changed();
             }
-            Event::PaneUpdate(_) => {
+            Event::TabUpdate(tabs) => {
+                self.active_tab = tabs.iter().find(|tab| tab.active).map(|tab| tab.position);
                 self.revision = self.revision.wrapping_add(1);
-                self.publish();
+                self.state_changed();
+            }
+            Event::PaneUpdate(manifest) => {
+                self.pane_manifest = Some(manifest);
+                self.revision = self.revision.wrapping_add(1);
+                self.state_changed();
+            }
+            Event::Timer(_) if self.publish_retry_pending => {
+                self.publish_retry_pending = false;
+                self.publish_or_retry();
             }
             Event::BeforeClose => {
                 self.pipe_id = None;
@@ -77,6 +97,10 @@ impl ZellijPlugin for Plugin {
                 let line: String = self.input.drain(..=end).collect();
                 self.handle_daemon_message(line.trim());
             }
+            if serde_json::from_str::<DaemonMessage>(self.input.trim()).is_ok() {
+                let line = std::mem::take(&mut self.input);
+                self.handle_daemon_message(line.trim());
+            }
         }
 
         unblock_cli_pipe_input(&pipe_id);
@@ -90,9 +114,10 @@ impl Plugin {
             return;
         };
         match message {
-            DaemonMessage::BindNiriWindow { window_id } => {
+            DaemonMessage::BindNiriWindow { window_id, session } => {
                 self.niri_window_id = Some(window_id);
-                self.publish();
+                self.session = Some(session);
+                self.defer_publish();
             }
             DaemonMessage::Navigate { direction, .. } => {
                 move_focus(match direction {
@@ -105,31 +130,73 @@ impl Plugin {
         }
     }
 
-    fn publish(&self) {
+    fn state_changed(&mut self) {
+        self.publish_retries = 0;
+        self.publish_or_retry();
+    }
+
+    fn defer_publish(&mut self) {
+        self.publish_retries = 0;
+        if !self.publish_retry_pending {
+            self.publish_retry_pending = true;
+            set_timeout(0.01);
+        }
+    }
+
+    fn publish_or_retry(&mut self) {
+        if self.publish() {
+            self.publish_retries = 0;
+            self.publish_retry_pending = false;
+        } else if !self.publish_retry_pending && self.publish_retries < MAX_PUBLISH_RETRIES {
+            self.publish_retries += 1;
+            self.publish_retry_pending = true;
+            set_timeout(PUBLISH_RETRY_INTERVAL_SECONDS);
+        }
+    }
+
+    fn publish(&self) -> bool {
         let (Some(pipe_id), Some(session), Some(niri_window_id)) = (
             self.pipe_id.as_ref(),
             self.session.as_ref(),
             self.niri_window_id,
         ) else {
-            return;
+            return false;
         };
-        let Ok((tab, focused)) = get_focused_pane_info() else {
-            return;
+        let cached_focus =
+            self.active_tab
+                .zip(self.pane_manifest.as_ref())
+                .and_then(|(tab, manifest)| {
+                    manifest.panes.get(&tab).and_then(|panes| {
+                        panes
+                            .iter()
+                            .find(|pane| !pane.is_plugin && pane.is_focused)
+                            .map(|pane| (pane.id, pane_neighbors(manifest, tab, pane.id)))
+                    })
+                });
+        let (focused_pane, pane_neighbors) = if let Some(cached_focus) = cached_focus {
+            cached_focus
+        } else {
+            let Ok((tab, focused)) = get_focused_pane_info() else {
+                return false;
+            };
+            let zellij_tile::prelude::PaneId::Terminal(focused_pane) = focused else {
+                return false;
+            };
+            let Ok(sessions) = get_session_list() else {
+                return false;
+            };
+            let Some(session_info) = sessions
+                .live_sessions
+                .iter()
+                .find(|info| info.name == *session)
+            else {
+                return false;
+            };
+            (
+                focused_pane,
+                pane_neighbors(&session_info.panes, tab, focused_pane),
+            )
         };
-        let ZellijPaneId::Terminal(focused_pane) = focused else {
-            return;
-        };
-        let Ok(sessions) = get_session_list() else {
-            return;
-        };
-        let Some(session_info) = sessions
-            .live_sessions
-            .iter()
-            .find(|info| info.name == *session)
-        else {
-            return;
-        };
-        let pane_neighbors = pane_neighbors(&session_info.panes, tab, focused_pane);
         let message = AdapterMessage::ZellijSnapshot {
             state: ZellijClientState {
                 client: ZellijClient {
@@ -145,6 +212,9 @@ impl Plugin {
         if let Ok(mut encoded) = serde_json::to_string(&message) {
             encoded.push('\n');
             cli_pipe_output(pipe_id, &encoded);
+            true
+        } else {
+            false
         }
     }
 }

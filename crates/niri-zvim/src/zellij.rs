@@ -1,6 +1,6 @@
 use std::{
     collections::BTreeSet,
-    path::{Path, PathBuf},
+    path::{Component, Path, PathBuf},
 };
 
 use anyhow::Context;
@@ -64,16 +64,29 @@ async fn run_bridge(
 ) -> anyhow::Result<()> {
     let plugin = plugin_path();
     anyhow::ensure!(plugin.is_file(), "plugin not found at {}", plugin.display());
-    let mut child = Command::new("zellij")
+    let plugin_url = format!("file:{}", plugin.display());
+    let status = Command::new("zellij")
         .args([
             "--session",
             session,
-            "pipe",
-            "--plugin",
-            &format!("file:{}", plugin.display()),
-            "--name",
-            "niri-zvim",
+            "action",
+            "start-or-reload-plugin",
+            &plugin_url,
         ])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .await
+        .with_context(|| format!("could not bootstrap plugin in Zellij session {session}"))?;
+    anyhow::ensure!(
+        status.success(),
+        "could not bootstrap plugin in Zellij session {session}"
+    );
+    sleep(Duration::from_millis(50)).await;
+
+    let mut child = Command::new("zellij")
+        .args(["--session", session, "pipe", "--name", "niri-zvim"])
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())
@@ -83,9 +96,13 @@ async fn run_bridge(
     let stdout = child.stdout.take().context("Zellij pipe has no stdout")?;
     let (sink, mut actions) = mpsc::unbounded_channel();
 
-    let bind = serde_json::to_vec(&DaemonMessage::BindNiriWindow { window_id })?;
+    let bind = serde_json::to_vec(&DaemonMessage::BindNiriWindow {
+        window_id,
+        session: session.to_owned(),
+    })?;
     stdin.write_all(&bind).await?;
     stdin.write_u8(b'\n').await?;
+    stdin.flush().await?;
     info!(%session, window_id, "connected Zellij bridge");
 
     tokio::spawn(async move {
@@ -94,7 +111,7 @@ async fn run_bridge(
                 continue;
             };
             encoded.push(b'\n');
-            if stdin.write_all(&encoded).await.is_err() {
+            if stdin.write_all(&encoded).await.is_err() || stdin.flush().await.is_err() {
                 break;
             }
         }
@@ -130,6 +147,10 @@ fn plugin_path() -> PathBuf {
 }
 
 fn session_socket_exists(session: &str) -> bool {
+    let mut components = Path::new(session).components();
+    if !matches!(components.next(), Some(Component::Normal(_))) || components.next().is_some() {
+        return false;
+    }
     let root = std::env::var_os("ZELLIJ_SOCKET_DIR")
         .map(PathBuf::from)
         .or_else(|| {
@@ -140,4 +161,16 @@ fn session_socket_exists(session: &str) -> bool {
         .join("contract_version_1")
         .join(session)
         .exists()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rejects_ghostty_titles_that_are_not_session_names() {
+        for title in ["", ".", "..", "/home/dl", "project/src"] {
+            assert!(!session_socket_exists(title), "accepted {title:?}");
+        }
+    }
 }

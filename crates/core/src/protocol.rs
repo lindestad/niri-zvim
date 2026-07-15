@@ -130,7 +130,7 @@ pub enum AdapterMessage {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum DaemonMessage {
-    BindNiriWindow { window_id: u64 },
+    BindNiriWindow { window_id: u64, session: String },
     Navigate { sequence: u64, direction: Direction },
 }
 
