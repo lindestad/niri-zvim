@@ -9,6 +9,7 @@ use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
     process::Command,
     sync::mpsc,
+    time::{Duration, sleep},
 };
 use tracing::{debug, info, warn};
 
@@ -35,11 +36,24 @@ impl BridgeManager {
             let session = session.to_owned();
             let window_id = window.id;
             tokio::spawn(async move {
-                if let Err(error) = run_bridge(&session, window_id, events).await {
-                    warn!(%session, %error, "Zellij bridge stopped");
+                loop {
+                    if let Err(error) = run_bridge(&session, window_id, events.clone()).await {
+                        warn!(%session, %error, "Zellij bridge stopped");
+                    }
+                    if !session_socket_exists(&session) {
+                        break;
+                    }
+                    sleep(Duration::from_millis(250)).await;
                 }
+                let _ = events
+                    .send(DaemonEvent::ZellijBridgeStopped { session })
+                    .await;
             });
         }
+    }
+
+    pub fn bridge_stopped(&mut self, session: &str) {
+        self.sessions.remove(session);
     }
 }
 

@@ -36,6 +36,9 @@ pub(crate) enum DaemonEvent {
         message: AdapterMessage,
         sink: Sink,
     },
+    ZellijBridgeStopped {
+        session: String,
+    },
 }
 
 struct Daemon {
@@ -76,6 +79,7 @@ impl Daemon {
                 }
             }
             DaemonEvent::Adapter { message, sink } => self.update_adapter(message, sink),
+            DaemonEvent::ZellijBridgeStopped { .. } => {}
         }
     }
 
@@ -156,6 +160,9 @@ pub async fn run_daemon() -> anyhow::Result<()> {
     while let Some(event) = events_rx.recv().await {
         if let DaemonEvent::NiriSnapshot { windows, .. } = &event {
             zellij.observe(windows, &events_tx);
+        }
+        if let DaemonEvent::ZellijBridgeStopped { session } = &event {
+            zellij.bridge_stopped(session);
         }
         daemon.handle(event);
     }

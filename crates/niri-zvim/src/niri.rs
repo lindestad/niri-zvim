@@ -102,10 +102,15 @@ fn action_loop(receiver: mpsc::Receiver<Direction>) {
         let result = socket
             .as_mut()
             .expect("socket was initialized")
-            .send(request);
+            .send(request.clone());
         if let Err(error) = result {
             debug!(%error, "reconnecting niri action socket");
-            socket = None;
+            socket = Socket::connect().ok();
+            let retry = socket.as_mut().map(|connection| connection.send(request));
+            if let Some(Err(error)) = retry {
+                debug!(%error, "retrying niri action failed");
+                socket = None;
+            }
         }
     }
 }

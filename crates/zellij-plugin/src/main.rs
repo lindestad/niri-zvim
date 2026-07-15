@@ -7,8 +7,9 @@ use niri_zvim_core::{
 use zellij_tile::prelude::{
     Direction as ZellijDirection, Event, EventType, PaneId as ZellijPaneId, PaneManifest,
     PermissionStatus, PermissionType, PipeMessage, PipeSource, ZellijPlugin, block_cli_pipe_input,
-    cli_pipe_output, get_focused_pane_info, get_plugin_ids, hide_self, move_focus, register_plugin,
-    report_panic, request_permission, set_selectable, subscribe, unblock_cli_pipe_input,
+    cli_pipe_output, get_focused_pane_info, get_plugin_ids, get_session_environment_variables,
+    get_session_list, hide_self, move_focus, register_plugin, report_panic, request_permission,
+    set_selectable, subscribe, unblock_cli_pipe_input,
 };
 
 #[derive(Default)]
@@ -17,7 +18,6 @@ struct Plugin {
     session: Option<String>,
     niri_window_id: Option<u64>,
     revision: u64,
-    panes: PaneManifest,
     pipe_id: Option<String>,
     input: String,
 }
@@ -27,30 +27,32 @@ register_plugin!(Plugin);
 impl ZellijPlugin for Plugin {
     fn load(&mut self, _configuration: BTreeMap<String, String>) {
         self.client_id = get_plugin_ids().client_id;
-        set_selectable(false);
         subscribe(&[EventType::PermissionRequestResult]);
         request_permission(&[
             PermissionType::ReadApplicationState,
             PermissionType::ChangeApplicationState,
+            PermissionType::ReadCliPipes,
+            PermissionType::ReadSessionEnvironmentVariables,
         ]);
-        hide_self();
     }
 
     fn update(&mut self, event: Event) -> bool {
         match event {
             Event::PermissionRequestResult(PermissionStatus::Granted) => {
+                self.session = get_session_environment_variables().remove("ZELLIJ_SESSION_NAME");
                 subscribe(&[
                     EventType::ModeUpdate,
                     EventType::PaneUpdate,
                     EventType::BeforeClose,
                 ]);
+                set_selectable(false);
+                hide_self();
             }
             Event::ModeUpdate(mode) => {
                 self.session = mode.session_name;
                 self.publish();
             }
-            Event::PaneUpdate(panes) => {
-                self.panes = panes;
+            Event::PaneUpdate(_) => {
                 self.revision = self.revision.wrapping_add(1);
                 self.publish();
             }
@@ -71,9 +73,6 @@ impl ZellijPlugin for Plugin {
 
         if let Some(payload) = message.payload {
             self.input.push_str(&payload);
-            if !self.input.ends_with('\n') {
-                self.input.push('\n');
-            }
             while let Some(end) = self.input.find('\n') {
                 let line: String = self.input.drain(..=end).collect();
                 self.handle_daemon_message(line.trim());
@@ -102,8 +101,6 @@ impl Plugin {
                     niri_zvim_core::Direction::Up => ZellijDirection::Up,
                     niri_zvim_core::Direction::Right => ZellijDirection::Right,
                 });
-                self.revision = self.revision.wrapping_add(1);
-                self.publish();
             }
         }
     }
@@ -122,7 +119,17 @@ impl Plugin {
         let ZellijPaneId::Terminal(focused_pane) = focused else {
             return;
         };
-        let pane_neighbors = pane_neighbors(&self.panes, tab, focused_pane);
+        let Ok(sessions) = get_session_list() else {
+            return;
+        };
+        let Some(session_info) = sessions
+            .live_sessions
+            .iter()
+            .find(|info| info.name == *session)
+        else {
+            return;
+        };
+        let pane_neighbors = pane_neighbors(&session_info.panes, tab, focused_pane);
         let message = AdapterMessage::ZellijSnapshot {
             state: ZellijClientState {
                 client: ZellijClient {
