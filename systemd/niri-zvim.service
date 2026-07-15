@@ -1,0 +1,13 @@
+[Unit]
+Description=State-synchronized navigation for Niri, Zellij, and Neovim
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/niri-zvimd
+Restart=on-failure
+RestartSec=250ms
+
+[Install]
+WantedBy=graphical-session.target

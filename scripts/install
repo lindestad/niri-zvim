@@ -1,0 +1,65 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+project_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+config_home="${XDG_CONFIG_HOME:-$HOME/.config}"
+data_home="${XDG_DATA_HOME:-$HOME/.local/share}"
+bin_dir="$HOME/.local/bin"
+zellij_plugin_dir="$config_home/zellij/plugins"
+nvim_site_dir="$data_home/nvim/site"
+systemd_dir="$config_home/systemd/user"
+
+command -v cargo >/dev/null || {
+  echo "cargo is required" >&2
+  exit 1
+}
+command -v rustup >/dev/null || {
+  echo "rustup is required to build the Zellij WASM plugin" >&2
+  exit 1
+}
+
+rustup target add wasm32-wasip1
+cargo build \
+  --manifest-path "$project_dir/Cargo.toml" \
+  --locked \
+  --release \
+  --package niri-zvim \
+  --target-dir "$project_dir/target/native"
+cargo build \
+  --manifest-path "$project_dir/Cargo.toml" \
+  --locked \
+  --release \
+  --package niri-zvim-zellij \
+  --target wasm32-wasip1
+
+mkdir -p \
+  "$bin_dir" \
+  "$zellij_plugin_dir" \
+  "$nvim_site_dir/lua" \
+  "$nvim_site_dir/plugin" \
+  "$systemd_dir"
+install -m 0755 "$project_dir/target/native/release/niri-zvim" "$bin_dir/niri-zvim"
+install -m 0755 "$project_dir/target/native/release/niri-zvimd" "$bin_dir/niri-zvimd"
+install -m 0644 \
+  "$project_dir/target/wasm32-wasip1/release/niri-zvim-zellij.wasm" \
+  "$zellij_plugin_dir/niri-zvim.wasm"
+install -m 0644 "$project_dir/systemd/niri-zvim.service" "$systemd_dir/niri-zvim.service"
+ln -sfn "$project_dir/nvim/lua/niri-zvim" "$nvim_site_dir/lua/niri-zvim"
+ln -sfn "$project_dir/nvim/plugin/niri-zvim.lua" "$nvim_site_dir/plugin/niri-zvim.lua"
+
+legacy_nvim_package="$nvim_site_dir/pack/niri-zvim/start/niri-zvim"
+if [[ -L "$legacy_nvim_package" ]]; then
+  rm "$legacy_nvim_package"
+fi
+
+if command -v systemctl >/dev/null; then
+  systemctl --user daemon-reload
+  systemctl --user enable --now niri-zvim.service
+  if systemctl --user cat app-com.mitchellh.ghostty.service >/dev/null 2>&1; then
+    systemctl --user enable app-com.mitchellh.ghostty.service
+  fi
+fi
+
+echo "Installed niri-zvim."
+echo "Before the first Zellij use, run this inside any Zellij session and approve the prompt:"
+echo "  zellij action launch-or-focus-plugin --floating file:$zellij_plugin_dir/niri-zvim.wasm"
