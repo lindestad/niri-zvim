@@ -1,6 +1,7 @@
 use std::{
     io::{Read, Write},
     os::unix::net::{UnixListener, UnixStream},
+    process::Command,
     thread,
 };
 
@@ -22,6 +23,17 @@ fn socket_dispatch(c: &mut Criterion) {
         b.iter(|| {
             let mut stream = UnixStream::connect(&path).unwrap();
             stream.write_all(&[Direction::Right.wire_byte()]).unwrap();
+        });
+    });
+
+    c.bench_function("keypress client process", |b| {
+        b.iter(|| {
+            let status = Command::new(env!("CARGO_BIN_EXE_niri-zvim"))
+                .arg("right")
+                .env("NIRI_ZVIM_SOCKET", &path)
+                .status()
+                .unwrap();
+            assert!(status.success());
         });
     });
 }
