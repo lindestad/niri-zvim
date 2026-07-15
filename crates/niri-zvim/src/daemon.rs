@@ -1,4 +1,9 @@
-use std::{collections::BTreeMap, fs, io::ErrorKind, path::Path};
+use std::{
+    collections::{BTreeMap, VecDeque},
+    fs,
+    io::ErrorKind,
+    path::Path,
+};
 
 use anyhow::Context;
 use niri_zvim_core::{
@@ -15,6 +20,7 @@ use tracing::{debug, info, warn};
 use crate::{
     niri::{NiriExecutor, start_event_thread},
     socket::{adapter_magic, socket_path},
+    zellij::BridgeManager,
 };
 
 type Sink = mpsc::UnboundedSender<DaemonMessage>;
@@ -24,6 +30,7 @@ pub(crate) enum DaemonEvent {
     NiriSnapshot {
         windows: Vec<NiriWindow>,
         focused: Option<u64>,
+        acknowledges_focus: bool,
     },
     Adapter {
         message: AdapterMessage,
@@ -37,6 +44,7 @@ struct Daemon {
     nvim: BTreeMap<String, Sink>,
     zellij: BTreeMap<ZellijClient, Sink>,
     sequence: u64,
+    pending_niri: VecDeque<Direction>,
 }
 
 impl Daemon {
@@ -47,14 +55,25 @@ impl Daemon {
             nvim: BTreeMap::new(),
             zellij: BTreeMap::new(),
             sequence: 0,
+            pending_niri: VecDeque::new(),
         }
     }
 
     fn handle(&mut self, event: DaemonEvent) {
         match event {
             DaemonEvent::Navigate(direction) => self.navigate(direction),
-            DaemonEvent::NiriSnapshot { windows, focused } => {
+            DaemonEvent::NiriSnapshot {
+                windows,
+                focused,
+                acknowledges_focus,
+            } => {
                 self.graph.replace_niri_windows(windows, focused);
+                if acknowledges_focus {
+                    self.pending_niri.pop_front();
+                }
+                for direction in self.pending_niri.iter().copied() {
+                    self.graph.predict_niri_focus(direction);
+                }
             }
             DaemonEvent::Adapter { message, sink } => self.update_adapter(message, sink),
         }
@@ -70,6 +89,7 @@ impl Daemon {
 
         let sent = match action {
             NavigationAction::Niri { direction } => {
+                self.pending_niri.push_back(direction);
                 self.niri.navigate(direction);
                 true
             }
@@ -96,6 +116,8 @@ impl Daemon {
                 ?direction,
                 "nested executor unavailable; falling back to niri"
             );
+            self.pending_niri.push_back(direction);
+            self.graph.predict_niri_focus(direction);
             self.niri.navigate(direction);
         }
     }
@@ -127,10 +149,14 @@ pub async fn run_daemon() -> anyhow::Result<()> {
 
     let (events_tx, mut events_rx) = mpsc::channel(1024);
     start_event_thread(events_tx.clone());
-    tokio::spawn(accept_loop(listener, events_tx));
+    tokio::spawn(accept_loop(listener, events_tx.clone()));
 
     let mut daemon = Daemon::new();
+    let mut zellij = BridgeManager::default();
     while let Some(event) = events_rx.recv().await {
+        if let DaemonEvent::NiriSnapshot { windows, .. } = &event {
+            zellij.observe(windows, &events_tx);
+        }
         daemon.handle(event);
     }
     Ok(())

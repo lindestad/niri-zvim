@@ -67,10 +67,15 @@ fn event_stream(events: &Sender<DaemonEvent>) -> anyhow::Result<()> {
                 | Event::WindowClosed { .. }
                 | Event::WindowFocusChanged { .. }
         );
+        let acknowledges_focus = matches!(event, Event::WindowFocusChanged { .. });
         state.apply(event);
         if is_window_event {
             let (windows, focused) = convert_windows(state.windows.windows.values());
-            events.blocking_send(DaemonEvent::NiriSnapshot { windows, focused })?;
+            events.blocking_send(DaemonEvent::NiriSnapshot {
+                windows,
+                focused,
+                acknowledges_focus,
+            })?;
         }
     }
 }

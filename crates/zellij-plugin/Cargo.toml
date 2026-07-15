@@ -9,4 +9,5 @@ crate-type = ["cdylib"]
 
 [dependencies]
 niri-zvim-core = { path = "../core" }
+serde_json.workspace = true
 zellij-tile.workspace = true

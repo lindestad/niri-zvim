@@ -23,14 +23,14 @@ fn graph() -> NavigationGraph {
         focused_window: 1,
         window_neighbors: BTreeMap::from([
             (
-                1,
+                "1".into(),
                 NeighborMap {
                     right: Some(2),
                     ..NeighborMap::default()
                 },
             ),
             (
-                2,
+                "2".into(),
                 NeighborMap {
                     left: Some(1),
                     ..NeighborMap::default()

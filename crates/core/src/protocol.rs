@@ -85,6 +85,7 @@ pub struct ZellijClient {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum NvimParent {
+    FocusedNiriWindow,
     NiriWindow(u64),
     ZellijPane {
         client: ZellijClient,
@@ -106,7 +107,7 @@ pub struct ZellijClientState {
     pub niri_window_id: u64,
     pub revision: Revision,
     pub focused_pane: PaneId,
-    pub pane_neighbors: BTreeMap<PaneId, NeighborMap<PaneId>>,
+    pub pane_neighbors: BTreeMap<String, NeighborMap<PaneId>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -115,7 +116,7 @@ pub struct NvimInstance {
     pub parent: NvimParent,
     pub revision: Revision,
     pub focused_window: u64,
-    pub window_neighbors: BTreeMap<u64, NeighborMap<u64>>,
+    pub window_neighbors: BTreeMap<String, NeighborMap<u64>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

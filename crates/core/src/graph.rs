@@ -48,7 +48,15 @@ impl NavigationGraph {
         }
     }
 
-    pub fn update_nvim(&mut self, state: NvimInstance) {
+    pub fn update_nvim(&mut self, mut state: NvimInstance) {
+        if matches!(state.parent, NvimParent::FocusedNiriWindow) {
+            state.parent = self
+                .nvim
+                .get(&state.id)
+                .map(|current| current.parent.clone())
+                .or_else(|| self.focused_niri_window.map(NvimParent::NiriWindow))
+                .unwrap_or(NvimParent::FocusedNiriWindow);
+        }
         let accept = self
             .nvim
             .get(&state.id)
@@ -60,6 +68,12 @@ impl NavigationGraph {
 
     pub fn remove_nvim(&mut self, id: &str) {
         self.nvim.remove(id);
+    }
+
+    pub fn predict_niri_focus(&mut self, direction: Direction) {
+        if let Some(current) = self.focused_niri_window {
+            self.move_niri_prediction(current, direction);
+        }
     }
 
     pub fn route_optimistically(
@@ -107,7 +121,12 @@ impl NavigationGraph {
             NvimParent::ZellijPane {
                 client: parent,
                 pane_id: parent_pane,
-            } if parent == client && *parent_pane == pane_id => Some(state.id.clone()),
+            } if parent.session == client.session
+                && (parent.client_id == 0 || parent.client_id == client.client_id)
+                && *parent_pane == pane_id =>
+            {
+                Some(state.id.clone())
+            }
             _ => None,
         })
     }
@@ -117,7 +136,7 @@ impl NavigationGraph {
             .nvim
             .get_mut(id)
             .expect("instance was selected from this map");
-        let Some(next) = state.window_neighbors[&state.focused_window]
+        let Some(next) = state.window_neighbors[&state.focused_window.to_string()]
             .get(direction)
             .copied()
         else {
@@ -133,7 +152,7 @@ impl NavigationGraph {
             .zellij
             .get_mut(client)
             .expect("client was selected from this map");
-        let Some(next) = state.pane_neighbors[&state.focused_pane]
+        let Some(next) = state.pane_neighbors[&state.focused_pane.to_string()]
             .get(direction)
             .copied()
         else {
@@ -195,7 +214,7 @@ mod tests {
             revision: 1,
             focused_pane: 10,
             pane_neighbors: BTreeMap::from([(
-                10,
+                "10".into(),
                 NeighborMap {
                     right: zellij_right,
                     ..NeighborMap::default()
@@ -211,7 +230,7 @@ mod tests {
             revision: 1,
             focused_window: 100,
             window_neighbors: BTreeMap::from([(
-                100,
+                "100".into(),
                 NeighborMap {
                     right: nvim_right,
                     ..NeighborMap::default()
@@ -249,7 +268,7 @@ mod tests {
             .get_mut("nvim-a")
             .unwrap()
             .window_neighbors
-            .insert(101, NeighborMap::default());
+            .insert("101".into(), NeighborMap::default());
         assert!(matches!(
             graph.route_optimistically(Direction::Right),
             Ok(NavigationAction::Nvim { .. })
@@ -271,6 +290,29 @@ mod tests {
         assert!(matches!(
             graph.route_optimistically(Direction::Right),
             Ok(NavigationAction::Nvim { .. })
+        ));
+    }
+
+    #[test]
+    fn direct_nvim_keeps_its_original_niri_parent() {
+        let mut graph = NavigationGraph::default();
+        graph.replace_niri_windows([], Some(1));
+        let state = NvimInstance {
+            id: "direct".into(),
+            parent: NvimParent::FocusedNiriWindow,
+            revision: 1,
+            focused_window: 100,
+            window_neighbors: BTreeMap::new(),
+        };
+        graph.update_nvim(state.clone());
+        graph.set_focused_niri_window(Some(2));
+        graph.update_nvim(NvimInstance {
+            revision: 2,
+            ..state
+        });
+        assert!(matches!(
+            graph.nvim["direct"].parent,
+            NvimParent::NiriWindow(1)
         ));
     }
 }
