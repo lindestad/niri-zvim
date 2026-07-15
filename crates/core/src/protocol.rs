@@ -121,9 +121,16 @@ pub struct NvimInstance {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum AdapterMessage {
-    ZellijSnapshot(ZellijClientState),
-    NvimSnapshot(NvimInstance),
+    ZellijSnapshot { state: ZellijClientState },
+    NvimSnapshot { state: NvimInstance },
     NvimClosed { id: String },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum DaemonMessage {
+    BindNiriWindow { window_id: u64 },
+    Navigate { sequence: u64, direction: Direction },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
