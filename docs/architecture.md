@@ -26,6 +26,15 @@ and predictions for any later pending commands are replayed on top of it. If
 an adapter event is coalesced, an observation matching a stored expected target
 implicitly acknowledges the corresponding prefix of the pending queue.
 
+Directional topology follows tiled-editor semantics: a candidate must be
+beyond the requested edge and overlap on the perpendicular axis. Comparing
+centers alone invents vertical neighbors between a full-height pane and a
+stack beside it. Zellij can have several candidates along one shared edge and
+chooses the most recently active one. The daemon uses a deterministic candidate
+for prediction, while the plugin acknowledges any actual move away from the
+command's origin so Zellij's MRU choice can authoritatively correct that
+prediction.
+
 This means acknowledgements are not a queue barrier. If two requests arrive
 before the first focus event, the second request is routed against the first
 request's predicted state. Niri focus events and explicitly acknowledged
@@ -37,6 +46,20 @@ Neovim command-line client. It is one short Unix-socket write followed by an
 in-memory graph transition. The daemon keeps a persistent Niri action socket,
 a persistent pipe per observed Zellij session, and a persistent socket per
 Neovim instance.
+
+Zellij focus is scoped to a connected client, not the session as a whole.
+Session-wide pane metadata can mark several panes `is_focused` when diagnostic
+or bootstrap clients have different histories. The plugin queries the pane for
+its associated client directly. Background CLI snapshots use `list-clients`
+and are accepted only when exactly one connected terminal client makes the
+mapping unambiguous.
+
+Pane resize and layout changes are normal authoritative topology updates.
+Zellij's plugin emits `PaneUpdate`, and a metadata watcher also fingerprints
+pane IDs, positions, dimensions, and visibility as a fallback. These snapshots
+replace the predicted base and pending commands are replayed over the new
+graph. A resize-only update cannot acknowledge navigation because focus did
+not leave the command's origin pane.
 
 ## Niri modes
 

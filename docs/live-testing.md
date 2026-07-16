@@ -65,9 +65,30 @@ transition.
 
 Zellij can report more than one `is_focused` pane when test panes are created
 or focused through separate clients. That state is meaningful per client but
-ambiguous for a test pretending there is one visible terminal. Multi-pane
-fixtures are consequently created in one startup KDL layout by the same
-client that owns the Ghostty surface.
+ambiguous for a test pretending there is one visible terminal. Assertions read
+the visible client's pane from `zellij action list-clients` rather than choosing
+the first session-wide focus flag.
+
+Dense consumed-column fixtures need two construction styles. The exact
+regression fixture launches one-pane sessions, lets Niri resize both Ghostty
+windows into their final consumed column, and then applies complete Zellij
+layouts atomically. This produces four panes stacked on the upper left beside
+one full-height pane, and two panes stacked on the lower left beside another
+full-height pane. It directly covers moving up from the lower left pane and
+then left from the upper right pane.
+
+The resize-reflow fixture intentionally does the opposite: it creates those
+dense layouts while each Ghostty is full-height and then consumes the windows.
+Zellij rearranges panes that no longer satisfy its minimum-size constraints.
+The test verifies that the geometry signature changed, then exercises both
+checkpointed navigation and a zero-delay `up,left` burst against the reported
+post-resize topology. This prevents tests from passing only because their
+fixture avoided real Zellij reflow.
+
+Neovim uses the same edge-and-overlap topology rule as the Rust graph. A
+full-height split beside a vertical stack has a left/right edge but no up/down
+edge; center-based scoring previously trapped `up` inside nested Neovim instead
+of falling through to the consumed Niri window above.
 
 Ghostty is a systemd-managed single-instance application in the supported
 setup. The suite opens surfaces with `ghostty +new-window` and supplies a
@@ -97,5 +118,8 @@ Run all tests with `just test`, or isolate a live scenario while debugging:
     scripts/test-live direct
     scripts/test-live zellij-three
     scripts/test-live nested
+    scripts/test-live consumed-zellij
+    scripts/test-live consumed-reflow
+    scripts/test-live consumed-nvim
 
 Do not interact with the desktop until the final summary appears.

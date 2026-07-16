@@ -19,11 +19,11 @@ case_debug_file="$runtime_dir/niri-zvim-live-$tag.debug"
 source "$project_dir/scripts/test-output"
 
 if (($# > 1)); then
-  echo "usage: scripts/test-live [all|direct|zellij-one|zellij-three|nested|workspaces]" >&2
+  echo "usage: scripts/test-live [all|direct|zellij-one|zellij-three|nested|consumed|consumed-zellij|consumed-reflow|consumed-nvim|workspaces]" >&2
   exit 2
 fi
 case "$selected_case" in
-  all | direct | zellij-one | zellij-three | nested | workspaces) ;;
+  all | direct | zellij-one | zellij-three | nested | consumed | consumed-zellij | consumed-reflow | consumed-nvim | workspaces) ;;
   *)
     echo "unknown live test case: $selected_case" >&2
     exit 2
@@ -74,6 +74,8 @@ source "$live_tests_dir/zellij-one.sh"
 source "$live_tests_dir/zellij-three.sh"
 # shellcheck source=scripts/live-tests/nested.sh
 source "$live_tests_dir/nested.sh"
+# shellcheck source=scripts/live-tests/consumed.sh
+source "$live_tests_dir/consumed.sh"
 # shellcheck source=scripts/live-tests/workspaces.sh
 source "$live_tests_dir/workspaces.sh"
 # shellcheck source=scripts/live-tests/preservation.sh
@@ -119,6 +121,18 @@ if [[ "$selected_case" == all || "$selected_case" == zellij-three ]]; then
 fi
 if [[ "$selected_case" == all || "$selected_case" == nested ]]; then
   run_case "nested Neovim in Zellij traversal" test_nested_nvim_in_zellij
+fi
+if [[ "$selected_case" == all || "$selected_case" == consumed ||
+  "$selected_case" == consumed-zellij ]]; then
+  run_case "consumed Zellij column traversal" test_consumed_zellij_columns
+fi
+if [[ "$selected_case" == all || "$selected_case" == consumed ||
+  "$selected_case" == consumed-reflow ]]; then
+  run_case "consumed Zellij resize reflow" test_consumed_zellij_resize_reflow
+fi
+if [[ "$selected_case" == all || "$selected_case" == consumed ||
+  "$selected_case" == consumed-nvim ]]; then
+  run_case "consumed direct and nested Neovim traversal" test_consumed_nvim_columns
 fi
 if [[ "$selected_case" == all || "$selected_case" == workspaces ]]; then
   run_case "workspace up/down traversal" test_workspace_navigation

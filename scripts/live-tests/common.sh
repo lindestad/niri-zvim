@@ -171,8 +171,12 @@ wait_for_nvim_count() {
 focused_zellij_pane() {
   local session="$1"
   timeout --signal=TERM --kill-after=2s "${operation_timeout_seconds}s" \
-    zellij --session "$session" action list-panes --all --json 2>/dev/null |
-    jq -r '[.[] | select((.is_plugin | not) and .is_focused)] | first | .id // empty'
+    zellij --session "$session" action list-clients 2>/dev/null |
+    awk 'NR > 1 && $2 ~ /^terminal_[0-9]+$/ {
+      sub(/^terminal_/, "", $2)
+      print $2
+      exit
+    }'
 }
 
 zellij_pane_ids() {
@@ -181,6 +185,15 @@ zellij_pane_ids() {
     zellij --session "$session" action list-panes --all --json 2>/dev/null |
     jq -r '[.[] | select((.is_plugin | not) and .is_selectable and (.is_suppressed | not))]
       | sort_by(.pane_x) | .[].id'
+}
+
+zellij_layout_signature() {
+  local session="$1"
+  timeout --signal=TERM --kill-after=2s "${operation_timeout_seconds}s" \
+    zellij --session "$session" action list-panes --all --json 2>/dev/null |
+    jq -c '[.[] | select(.is_plugin | not)
+      | {id, x: .pane_x, y: .pane_y, rows: .pane_rows, columns: .pane_columns}]
+      | sort_by(.id)'
 }
 
 wait_for_zellij_session() {
@@ -291,6 +304,28 @@ move_window_column_last() {
   local window="$1"
   focus_niri_window "$window"
   niri msg action move-column-to-last >/dev/null
+}
+
+consume_window_below() {
+  local upper="$1"
+  local lower="$2"
+  local upper_position lower_position
+  focus_niri_window "$upper"
+  niri msg action consume-window-into-column >/dev/null
+  for _ in {1..150}; do
+    upper_position="$(niri msg --json windows | jq -r --argjson id "$upper" \
+      '.[] | select(.id == $id) | .layout.pos_in_scrolling_layout | @tsv')"
+    lower_position="$(niri msg --json windows | jq -r --argjson id "$lower" \
+      '.[] | select(.id == $id) | .layout.pos_in_scrolling_layout | @tsv')"
+    if [[ "$upper_position" =~ ^([0-9]+)$'\t'1$ &&
+      "$lower_position" == "${BASH_REMATCH[1]}"$'\t'2 ]]; then
+      sleep 0.1
+      return 0
+    fi
+    sleep 0.02
+  done
+  echo "could not consume Niri window $lower below $upper" >&2
+  return 1
 }
 
 launch_terminal() {
@@ -423,6 +458,89 @@ assert_nvim_now() {
   fi
   test_fail "$label (expected nvim=$expected, actual nvim=$actual)" "  "
   return 1
+}
+
+expect_zellij_side() {
+  local label="$1"
+  local expected_niri="$2"
+  local session="$3"
+  local side="$4"
+  local focused pane_x max_x
+  for _ in {1..150}; do
+    focused="$(niri msg --json focused-window | jq -r '.id // empty')"
+    local focused_pane
+    focused_pane="$(focused_zellij_pane "$session")"
+    read -r pane_x max_x < <(zellij --session "$session" action list-panes --all --json |
+      jq -r --argjson focused "$focused_pane" '[.[] | select(.is_plugin | not)] as $panes
+        | ($panes | map(.pane_x) | max) as $max
+        | ($panes[] | select(.id == $focused) | [.pane_x, $max] | @tsv)')
+    if [[ "$focused" == "$expected_niri" &&
+      (("$side" == left && "$pane_x" -lt "$max_x") ||
+        ("$side" == right && "$pane_x" -eq "$max_x")) ]]; then
+      test_pass "$label" "  "
+      return 0
+    fi
+    sleep 0.02
+  done
+  test_fail "$label" "  "
+  printf '    expected niri=%s zellij-side=%s\n' "$expected_niri" "$side" >&2
+  printf '    actual   niri=%s pane-x=%s max-x=%s\n' \
+    "$focused" "${pane_x:-unknown}" "${max_x:-unknown}" >&2
+  return 1
+}
+
+navigate_expect_zellij_side() {
+  local label="$1"
+  local direction="$2"
+  shift 2
+  mark_state "navigating $direction: $label"
+  timeout --signal=TERM --kill-after=2s "${operation_timeout_seconds}s" \
+    niri-zvim "$direction"
+  expect_zellij_side "$label" "$@"
+  sleep 0.1
+  mark_state "completed: $label"
+}
+
+expect_nvim_changed() {
+  local label="$1"
+  local expected_niri="$2"
+  local socket="$3"
+  local previous="$4"
+  local session="${5:--}"
+  local expected_pane="${6:--}"
+  local focused pane current
+  for _ in {1..150}; do
+    focused="$(niri msg --json focused-window | jq -r '.id // empty')"
+    current="$(nvim_remote_expr "$socket" 'win_getid()')"
+    pane=-
+    if [[ "$session" != - ]]; then
+      pane="$(focused_zellij_pane "$session")"
+    fi
+    if [[ "$focused" == "$expected_niri" && "$current" != "$previous" &&
+      "$pane" == "$expected_pane" ]]; then
+      test_pass "$label" "  "
+      return 0
+    fi
+    sleep 0.02
+  done
+  test_fail "$label" "  "
+  printf '    expected niri=%s nvim!=%s pane=%s\n' \
+    "$expected_niri" "$previous" "$expected_pane" >&2
+  printf '    actual   niri=%s nvim=%s pane=%s\n' \
+    "$focused" "$current" "$pane" >&2
+  return 1
+}
+
+navigate_expect_nvim_changed() {
+  local label="$1"
+  local direction="$2"
+  shift 2
+  mark_state "navigating $direction: $label"
+  timeout --signal=TERM --kill-after=2s "${operation_timeout_seconds}s" \
+    niri-zvim "$direction"
+  expect_nvim_changed "$label" "$@"
+  sleep 0.1
+  mark_state "completed: $label"
 }
 
 navigate_expect() {
