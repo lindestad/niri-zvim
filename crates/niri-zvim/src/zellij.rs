@@ -1,10 +1,21 @@
 use std::{
     collections::BTreeSet,
+    collections::hash_map::DefaultHasher,
+    fs,
+    hash::{Hash, Hasher},
     path::{Component, Path, PathBuf},
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
 };
 
 use anyhow::Context;
-use niri_zvim_core::{AdapterMessage, DaemonMessage, NiriWindow};
+use niri_zvim_core::{
+    AdapterMessage, DaemonMessage, NeighborMap, NiriWindow, Rect, ZellijClient, ZellijClientState,
+    directional_neighbors,
+};
+use serde::Deserialize;
 use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
     process::Command,
@@ -95,6 +106,24 @@ async fn run_bridge(
     let mut stdin = child.stdin.take().context("Zellij pipe has no stdin")?;
     let stdout = child.stdout.take().context("Zellij pipe has no stdout")?;
     let (sink, mut actions) = mpsc::unbounded_channel();
+    let revisions = Arc::new(AtomicU64::new(0));
+
+    if let Ok(state) = query_snapshot(session, window_id, 0).await {
+        events
+            .send(DaemonEvent::Adapter {
+                message: AdapterMessage::ZellijSnapshot { state },
+                sink: sink.clone(),
+            })
+            .await?;
+    }
+
+    let metadata_watcher = tokio::spawn(watch_session_metadata(
+        session.to_owned(),
+        window_id,
+        events.clone(),
+        sink.clone(),
+        revisions.clone(),
+    ));
 
     let bind = serde_json::to_vec(&DaemonMessage::BindNiriWindow {
         window_id,
@@ -105,14 +134,40 @@ async fn run_bridge(
     stdin.flush().await?;
     info!(%session, window_id, "connected Zellij bridge");
 
+    let refresh_session = session.to_owned();
+    let refresh_events = events.clone();
+    let refresh_sink = sink.clone();
+    let action_revisions = revisions.clone();
     tokio::spawn(async move {
         while let Some(message) = actions.recv().await {
+            let should_refresh = match &message {
+                DaemonMessage::Navigate { .. } => true,
+                DaemonMessage::BindNiriWindow { .. } => false,
+            };
             let Ok(mut encoded) = serde_json::to_vec(&message) else {
                 continue;
             };
             encoded.push(b'\n');
             if stdin.write_all(&encoded).await.is_err() || stdin.flush().await.is_err() {
                 break;
+            }
+            if should_refresh {
+                let revision = action_revisions.fetch_add(1, Ordering::Relaxed) + 1;
+                let session = refresh_session.clone();
+                let events = refresh_events.clone();
+                let sink = refresh_sink.clone();
+                tokio::spawn(async move {
+                    sleep(Duration::from_millis(20)).await;
+                    if let Ok(mut state) = query_snapshot(&session, window_id, 0).await {
+                        state.revision = revision;
+                        let _ = events
+                            .send(DaemonEvent::Adapter {
+                                message: AdapterMessage::ZellijSnapshot { state },
+                                sink,
+                            })
+                            .await;
+                    }
+                });
             }
         }
     });
@@ -121,18 +176,210 @@ async fn run_bridge(
     while let Some(line) = lines.next_line().await? {
         match serde_json::from_str::<AdapterMessage>(&line) {
             Ok(message) => {
+                let refresh = matches!(message, AdapterMessage::ZellijSnapshot { .. });
                 events
                     .send(DaemonEvent::Adapter {
                         message,
                         sink: sink.clone(),
                     })
                     .await?;
+                if refresh {
+                    let revision = revisions.fetch_add(1, Ordering::Relaxed) + 1;
+                    let session = session.to_owned();
+                    let events = events.clone();
+                    let sink = sink.clone();
+                    tokio::spawn(async move {
+                        if let Ok(mut state) = query_snapshot(&session, window_id, 0).await {
+                            state.revision = revision;
+                            let _ = events
+                                .send(DaemonEvent::Adapter {
+                                    message: AdapterMessage::ZellijSnapshot { state },
+                                    sink,
+                                })
+                                .await;
+                        }
+                    });
+                }
             }
             Err(error) => debug!(%error, %line, "ignored invalid Zellij bridge output"),
         }
     }
     let status = child.wait().await?;
+    metadata_watcher.abort();
     anyhow::bail!("Zellij pipe exited with {status}")
+}
+
+async fn watch_session_metadata(
+    session: String,
+    window_id: u64,
+    events: mpsc::Sender<DaemonEvent>,
+    sink: mpsc::UnboundedSender<DaemonMessage>,
+    revisions: Arc<AtomicU64>,
+) {
+    let metadata = session_metadata_path(&session);
+    let mut last_topology = metadata_topology_stamp(&metadata);
+    loop {
+        sleep(Duration::from_millis(50)).await;
+        let topology = metadata_topology_stamp(&metadata);
+        if topology == last_topology {
+            continue;
+        }
+        sleep(Duration::from_millis(20)).await;
+        last_topology = metadata_topology_stamp(&metadata);
+        let Ok(mut state) = query_snapshot(&session, window_id, 0).await else {
+            continue;
+        };
+        state.revision = revisions.fetch_add(1, Ordering::Relaxed) + 1;
+        if events
+            .send(DaemonEvent::Adapter {
+                message: AdapterMessage::ZellijSnapshot { state },
+                sink: sink.clone(),
+            })
+            .await
+            .is_err()
+        {
+            break;
+        }
+    }
+}
+
+fn session_metadata_path(session: &str) -> PathBuf {
+    let cache = std::env::var_os("XDG_CACHE_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".cache")))
+        .unwrap_or_else(|| PathBuf::from("."));
+    cache
+        .join("zellij/contract_version_1/session_info")
+        .join(session)
+        .join("session-metadata.kdl")
+}
+
+fn metadata_topology_stamp(path: &Path) -> Option<u64> {
+    let contents = fs::read_to_string(path).ok()?;
+    Some(metadata_topology_fingerprint(&contents))
+}
+
+fn metadata_topology_fingerprint(contents: &str) -> u64 {
+    const STATE_FIELDS: &[&str] = &[
+        "position ",
+        "active ",
+        "are_floating_panes_visible ",
+        "id ",
+        "is_plugin ",
+        "is_focused ",
+        "is_floating ",
+        "is_suppressed ",
+        "pane_x ",
+        "pane_y ",
+        "pane_rows ",
+        "pane_columns ",
+        "is_selectable ",
+        "tab_position ",
+    ];
+    let mut hasher = DefaultHasher::new();
+    for line in contents.lines().map(str::trim) {
+        if STATE_FIELDS.iter().any(|field| line.starts_with(field)) {
+            line.hash(&mut hasher);
+        }
+    }
+    hasher.finish()
+}
+
+#[derive(Debug, Deserialize)]
+struct ListedPane {
+    id: u32,
+    is_plugin: bool,
+    is_focused: bool,
+    is_floating: bool,
+    is_suppressed: bool,
+    is_selectable: bool,
+    pane_x: usize,
+    pane_y: usize,
+    pane_rows: usize,
+    pane_columns: usize,
+    tab_position: usize,
+}
+
+async fn query_snapshot(
+    session: &str,
+    window_id: u64,
+    client_id: u16,
+) -> anyhow::Result<ZellijClientState> {
+    let output = Command::new("zellij")
+        .args([
+            "--session",
+            session,
+            "action",
+            "list-panes",
+            "--all",
+            "--json",
+        ])
+        .output()
+        .await
+        .with_context(|| format!("could not list panes in Zellij session {session}"))?;
+    anyhow::ensure!(
+        output.status.success(),
+        "could not list panes in Zellij session {session}"
+    );
+    let panes: Vec<ListedPane> = serde_json::from_slice(&output.stdout)?;
+    snapshot_from_panes(session, window_id, client_id, &panes)
+        .context("Zellij has no focused terminal pane")
+}
+
+fn snapshot_from_panes(
+    session: &str,
+    window_id: u64,
+    client_id: u16,
+    panes: &[ListedPane],
+) -> Option<ZellijClientState> {
+    let focused = panes
+        .iter()
+        .find(|pane| !pane.is_plugin && pane.is_focused)?;
+    let rectangles: Vec<_> = panes
+        .iter()
+        .filter(|pane| {
+            !pane.is_plugin
+                && pane.is_selectable
+                && !pane.is_suppressed
+                && pane.tab_position == focused.tab_position
+                && pane.is_floating == focused.is_floating
+        })
+        .map(|pane| {
+            (
+                u64::from(pane.id),
+                Rect {
+                    x: pane.pane_x as f64,
+                    y: pane.pane_y as f64,
+                    width: pane.pane_columns as f64,
+                    height: pane.pane_rows as f64,
+                },
+            )
+        })
+        .collect();
+    let pane_neighbors = directional_neighbors(rectangles)
+        .into_iter()
+        .map(|(id, neighbors)| {
+            (
+                (id as u32).to_string(),
+                NeighborMap {
+                    left: neighbors.left.map(|id| id as u32),
+                    down: neighbors.down.map(|id| id as u32),
+                    up: neighbors.up.map(|id| id as u32),
+                    right: neighbors.right.map(|id| id as u32),
+                },
+            )
+        })
+        .collect();
+    Some(ZellijClientState {
+        client: ZellijClient {
+            session: session.to_owned(),
+            client_id,
+        },
+        niri_window_id: window_id,
+        revision: 0,
+        focused_pane: focused.id,
+        pane_neighbors,
+    })
 }
 
 fn plugin_path() -> PathBuf {
@@ -172,5 +419,44 @@ mod tests {
         for title in ["", ".", "..", "/home/dl", "project/src"] {
             assert!(!session_socket_exists(title), "accepted {title:?}");
         }
+    }
+
+    #[test]
+    fn builds_initial_snapshot_from_listed_panes() {
+        let pane = |id, x, focused| ListedPane {
+            id,
+            is_plugin: false,
+            is_focused: focused,
+            is_floating: false,
+            is_suppressed: false,
+            is_selectable: true,
+            pane_x: x,
+            pane_y: 0,
+            pane_rows: 20,
+            pane_columns: 40,
+            tab_position: 0,
+        };
+        let state =
+            snapshot_from_panes("dev", 42, 0, &[pane(1, 0, true), pane(2, 40, false)]).unwrap();
+
+        assert_eq!(state.focused_pane, 1);
+        assert_eq!(state.pane_neighbors["1"].right, Some(2));
+        assert_eq!(state.pane_neighbors["2"].left, Some(1));
+    }
+
+    #[test]
+    fn metadata_fingerprint_ignores_cursor_but_tracks_topology() {
+        let first = "id 1\npane_columns 40\ncursor_coordinates_in_pane 2 3\n";
+        let moved_cursor = "id 1\npane_columns 40\ncursor_coordinates_in_pane 9 8\n";
+        let resized = "id 1\npane_columns 80\ncursor_coordinates_in_pane 9 8\n";
+
+        assert_eq!(
+            metadata_topology_fingerprint(first),
+            metadata_topology_fingerprint(moved_cursor)
+        );
+        assert_ne!(
+            metadata_topology_fingerprint(first),
+            metadata_topology_fingerprint(resized)
+        );
     }
 }

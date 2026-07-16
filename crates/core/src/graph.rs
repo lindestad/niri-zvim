@@ -294,6 +294,35 @@ mod tests {
     }
 
     #[test]
+    fn cli_snapshot_wins_over_stale_plugin_snapshot() {
+        let mut graph = nested_graph(None, None);
+        graph.update_zellij(ZellijClientState {
+            client: ZellijClient {
+                session: "dev".into(),
+                client_id: 0,
+            },
+            niri_window_id: 1,
+            revision: 1,
+            focused_pane: 10,
+            pane_neighbors: BTreeMap::from([(
+                "10".into(),
+                NeighborMap {
+                    right: Some(11),
+                    ..NeighborMap::default()
+                },
+            )]),
+        });
+
+        assert!(matches!(
+            graph.route_optimistically(Direction::Right),
+            Ok(NavigationAction::Zellij {
+                client: ZellijClient { client_id: 0, .. },
+                ..
+            })
+        ));
+    }
+
+    #[test]
     fn direct_nvim_keeps_its_original_niri_parent() {
         let mut graph = NavigationGraph::default();
         graph.replace_niri_windows([], Some(1));

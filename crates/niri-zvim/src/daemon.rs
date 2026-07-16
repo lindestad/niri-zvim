@@ -90,6 +90,7 @@ impl Daemon {
             self.niri.navigate(direction);
             return;
         };
+        debug!(?direction, ?action, "routed navigation");
 
         let sent = match action {
             NavigationAction::Niri { direction } => {
@@ -133,6 +134,14 @@ impl Daemon {
                 self.graph.update_nvim(state);
             }
             AdapterMessage::ZellijSnapshot { state } => {
+                debug!(
+                    session = %state.client.session,
+                    client_id = state.client.client_id,
+                    window_id = state.niri_window_id,
+                    revision = state.revision,
+                    focused_pane = state.focused_pane,
+                    "received Zellij snapshot"
+                );
                 self.zellij.insert(state.client.clone(), sink);
                 self.graph.update_zellij(state);
             }
