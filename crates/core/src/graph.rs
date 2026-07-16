@@ -32,6 +32,13 @@ impl NavigationGraph {
             .map(|window| (window.id, window))
             .collect();
         self.focused_niri_window = focused;
+        if let Some(focused) = focused {
+            for state in self.nvim.values_mut() {
+                if matches!(state.parent, NvimParent::FocusedNiriWindow) && state.terminal_focused {
+                    state.parent = NvimParent::NiriWindow(focused);
+                }
+            }
+        }
     }
 
     pub fn set_focused_niri_window(&mut self, focused: Option<u64>) {
@@ -53,8 +60,16 @@ impl NavigationGraph {
             state.parent = self
                 .nvim
                 .get(&state.id)
-                .map(|current| current.parent.clone())
-                .or_else(|| self.focused_niri_window.map(NvimParent::NiriWindow))
+                .and_then(|current| match &current.parent {
+                    NvimParent::FocusedNiriWindow => None,
+                    parent => Some(parent.clone()),
+                })
+                .or_else(|| {
+                    state
+                        .terminal_focused
+                        .then(|| self.focused_niri_window.map(NvimParent::NiriWindow))
+                        .flatten()
+                })
                 .unwrap_or(NvimParent::FocusedNiriWindow);
         }
         let accept = self
@@ -227,6 +242,7 @@ mod tests {
                 client,
                 pane_id: 10,
             },
+            terminal_focused: false,
             revision: 1,
             focused_window: 100,
             window_neighbors: BTreeMap::from([(
@@ -329,6 +345,7 @@ mod tests {
         let state = NvimInstance {
             id: "direct".into(),
             parent: NvimParent::FocusedNiriWindow,
+            terminal_focused: true,
             revision: 1,
             focused_window: 100,
             window_neighbors: BTreeMap::new(),
@@ -342,6 +359,44 @@ mod tests {
         assert!(matches!(
             graph.nvim["direct"].parent,
             NvimParent::NiriWindow(1)
+        ));
+    }
+
+    #[test]
+    fn unfocused_direct_nvim_does_not_claim_the_focused_window() {
+        let mut graph = NavigationGraph::default();
+        graph.replace_niri_windows([], Some(1));
+        graph.update_nvim(NvimInstance {
+            id: "background".into(),
+            parent: NvimParent::FocusedNiriWindow,
+            terminal_focused: false,
+            revision: 1,
+            focused_window: 100,
+            window_neighbors: BTreeMap::new(),
+        });
+
+        assert!(matches!(
+            graph.nvim["background"].parent,
+            NvimParent::FocusedNiriWindow
+        ));
+    }
+
+    #[test]
+    fn focused_direct_nvim_binds_on_the_next_niri_snapshot() {
+        let mut graph = NavigationGraph::default();
+        graph.update_nvim(NvimInstance {
+            id: "pending".into(),
+            parent: NvimParent::FocusedNiriWindow,
+            terminal_focused: true,
+            revision: 1,
+            focused_window: 100,
+            window_neighbors: BTreeMap::new(),
+        });
+        graph.replace_niri_windows([], Some(7));
+
+        assert!(matches!(
+            graph.nvim["pending"].parent,
+            NvimParent::NiriWindow(7)
         ));
     }
 }

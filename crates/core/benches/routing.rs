@@ -19,6 +19,7 @@ fn graph() -> NavigationGraph {
     graph.update_nvim(NvimInstance {
         id: "bench".into(),
         parent: NvimParent::NiriWindow(1),
+        terminal_focused: true,
         revision: 0,
         focused_window: 1,
         window_neighbors: BTreeMap::from([

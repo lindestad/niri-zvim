@@ -114,6 +114,8 @@ pub struct ZellijClientState {
 pub struct NvimInstance {
     pub id: String,
     pub parent: NvimParent,
+    #[serde(default)]
+    pub terminal_focused: bool,
     pub revision: Revision,
     pub focused_window: u64,
     pub window_neighbors: BTreeMap<String, NeighborMap<u64>>,

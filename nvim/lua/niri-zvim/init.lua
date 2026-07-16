@@ -8,6 +8,7 @@ local instance_id = string.format("nvim-%d-%d", vim.fn.getpid(), uv.hrtime())
 local current_state
 local reconnect_timer
 local publish_pending = false
+local terminal_focused = false
 
 local function socket_path()
   return vim.env.NIRI_ZVIM_SOCKET
@@ -104,6 +105,7 @@ local function snapshot()
   current_state = {
     id = instance_id,
     parent = parent(),
+    terminal_focused = terminal_focused,
     revision = revision,
     focused_window = vim.api.nvim_get_current_win(),
     window_neighbors = build_neighbors(),
@@ -212,6 +214,20 @@ function M.setup()
     group = group,
     callback = function()
       write({ type = "nvim_closed", id = instance_id })
+    end,
+  })
+  vim.api.nvim_create_autocmd("FocusGained", {
+    group = group,
+    callback = function()
+      terminal_focused = true
+      schedule_snapshot()
+    end,
+  })
+  vim.api.nvim_create_autocmd("FocusLost", {
+    group = group,
+    callback = function()
+      terminal_focused = false
+      schedule_snapshot()
     end,
   })
   M.connect()

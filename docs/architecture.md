@@ -35,5 +35,7 @@ Neovim instance.
 
 Niri windows use compositor window IDs. Zellij clients use session name plus
 client ID. Neovim instances use a generated token and declare either a Niri
-window or a Zellij client/pane as their parent. No process-tree inference is
-used.
+window or a Zellij client/pane as their parent. A direct Neovim instance may
+claim the focused Niri window only while its terminal reports `FocusGained`;
+this keeps multiple Ghostty surfaces distinct even though GTK single-instance
+mode gives them the same process ID. No process-tree inference is used.
