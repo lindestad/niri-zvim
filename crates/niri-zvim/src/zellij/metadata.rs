@@ -62,6 +62,7 @@ fn metadata_topology_fingerprint(contents: &str) -> u64 {
         "pane_y ",
         "pane_rows ",
         "pane_columns ",
+        "pane_id type=",
         "is_selectable ",
         "tab_position ",
     ];
@@ -126,6 +127,17 @@ mod tests {
         assert_ne!(
             metadata_topology_fingerprint(first),
             metadata_topology_fingerprint(resized)
+        );
+    }
+
+    #[test]
+    fn metadata_fingerprint_tracks_client_pane_history() {
+        let first = "pane_id type=\"terminal\" 0\npane_id type=\"terminal\" 1\n";
+        let second = "pane_id type=\"terminal\" 1\npane_id type=\"terminal\" 0\n";
+
+        assert_ne!(
+            metadata_topology_fingerprint(first),
+            metadata_topology_fingerprint(second)
         );
     }
 }
