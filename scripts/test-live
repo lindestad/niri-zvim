@@ -1,0 +1,183 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+runtime_dir="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+tag="$$"
+nvim_socket="$runtime_dir/niri-zvim-live-nvim-$tag.sock"
+nvim_title="niri-zvim-live-nvim-$tag"
+zellij_session="niri-zvim-live-zellij-$tag"
+original_window="$(niri msg --json focused-window | jq -r '.id // empty')"
+nvim_window=""
+zellij_window=""
+
+cleanup() {
+  if [[ -S "$nvim_socket" ]]; then
+    nvim --server "$nvim_socket" --remote-expr 'execute("qa!")' >/dev/null 2>&1 || true
+  fi
+  if [[ -n "$nvim_window" ]]; then
+    niri msg action close-window --id "$nvim_window" >/dev/null 2>&1 || true
+  fi
+  if [[ -n "$zellij_window" ]]; then
+    niri msg action close-window --id "$zellij_window" >/dev/null 2>&1 || true
+  fi
+  zellij kill-session "$zellij_session" >/dev/null 2>&1 || true
+  zellij delete-session "$zellij_session" --force >/dev/null 2>&1 || true
+  if [[ -n "$original_window" ]]; then
+    niri msg action focus-window --id "$original_window" >/dev/null 2>&1 || true
+  fi
+}
+trap cleanup EXIT INT TERM
+
+for command in ghostty jq niri niri-zvim nvim systemctl zellij; do
+  command -v "$command" >/dev/null || {
+    echo "$command is required" >&2
+    exit 1
+  }
+done
+systemctl --user is-active --quiet niri-zvim.service || {
+  echo "niri-zvim.service is not active" >&2
+  exit 1
+}
+if [[ -z "$original_window" ]]; then
+  echo "focus a normal Niri window before running this test (not a layer-shell surface)" >&2
+  exit 1
+fi
+
+wait_for_socket() {
+  for _ in {1..100}; do
+    [[ -S "$1" ]] && return 0
+    sleep 0.05
+  done
+  echo "timed out waiting for socket $1" >&2
+  return 1
+}
+
+wait_for_window() {
+  local title="$1"
+  local mode="$2"
+  local window
+  for _ in {1..100}; do
+    if [[ "$mode" == exact ]]; then
+      window="$(niri msg --json windows | jq -r --arg title "$title" \
+        '.[] | select(.title == $title) | .id' | tail -1)"
+    else
+      window="$(niri msg --json windows | jq -r --arg title "$title" \
+        '.[] | select(.title | contains($title)) | .id' | tail -1)"
+    fi
+    if [[ -n "$window" ]]; then
+      printf '%s\n' "$window"
+      return 0
+    fi
+    sleep 0.05
+  done
+  echo "timed out waiting for window $title" >&2
+  return 1
+}
+
+wait_for_nvim_window() {
+  local expected="$1"
+  local current
+  for _ in {1..100}; do
+    current="$(nvim --server "$nvim_socket" --remote-expr 'win_getid()')"
+    [[ "$current" == "$expected" ]] && return 0
+    sleep 0.02
+  done
+  echo "Neovim focused window did not become $expected" >&2
+  return 1
+}
+
+wait_for_niri_window() {
+  local expected="$1"
+  for _ in {1..100}; do
+    niri msg action focus-window --id "$expected" >/dev/null
+    if [[ "$(niri msg --json focused-window | jq -r '.id // empty')" == "$expected" ]]; then
+      return 0
+    fi
+    sleep 0.02
+  done
+  echo "Niri focused window did not become $expected" >&2
+  return 1
+}
+
+focused_zellij_pane() {
+  zellij --session "$zellij_session" action list-panes --all --json |
+    jq -r '.[] | select((.is_plugin | not) and .is_focused) | .id'
+}
+
+wait_for_zellij_pane() {
+  local expected="$1"
+  for _ in {1..100}; do
+    [[ "$(focused_zellij_pane)" == "$expected" ]] && return 0
+    sleep 0.02
+  done
+  echo "Zellij focused pane did not become $expected" >&2
+  return 1
+}
+
+echo "direct Neovim"
+ghostty +new-window -e nvim \
+  --listen "$nvim_socket" \
+  --cmd "set title titlestring=$nvim_title" \
+  -c vsplit
+wait_for_socket "$nvim_socket"
+nvim_window="$(wait_for_window "$nvim_title" exact)"
+wait_for_niri_window "$nvim_window"
+sleep 0.1
+nvim --server "$nvim_socket" --remote-expr 'execute("wincmd l")' >/dev/null
+sleep 0.1
+
+nvim_right="$(nvim --server "$nvim_socket" --remote-expr 'win_getid()')"
+niri-zvim left
+for _ in {1..100}; do
+  nvim_left="$(nvim --server "$nvim_socket" --remote-expr 'win_getid()')"
+  [[ "$nvim_left" != "$nvim_right" ]] && break
+  sleep 0.02
+done
+[[ "$nvim_left" != "$nvim_right" ]] || {
+  echo "Neovim did not move left" >&2
+  exit 1
+}
+[[ "$(niri msg --json focused-window | jq -r '.id // empty')" == "$nvim_window" ]] || {
+  echo "Niri left the direct Neovim window" >&2
+  exit 1
+}
+niri-zvim right
+wait_for_nvim_window "$nvim_right"
+printf '  %s -> %s -> %s, Niri stayed on %s\n' \
+  "$nvim_right" "$nvim_left" "$nvim_right" "$nvim_window"
+
+echo "Zellij"
+ghostty +new-window -e zellij --session "$zellij_session"
+for _ in {1..100}; do
+  zellij list-sessions --short --no-formatting 2>/dev/null |
+    grep -qx "$zellij_session" && break
+  sleep 0.05
+done
+zellij_window="$(wait_for_window "$zellij_session" contains)"
+sleep 0.5
+zellij --session "$zellij_session" action new-pane --direction right >/dev/null
+sleep 0.3
+wait_for_niri_window "$zellij_window"
+sleep 0.1
+
+zellij_right="$(focused_zellij_pane)"
+niri-zvim left
+for _ in {1..100}; do
+  zellij_left="$(focused_zellij_pane)"
+  [[ "$zellij_left" != "$zellij_right" ]] && break
+  sleep 0.02
+done
+[[ "$zellij_left" != "$zellij_right" ]] || {
+  echo "Zellij did not move left" >&2
+  exit 1
+}
+niri-zvim right
+wait_for_zellij_pane "$zellij_right"
+[[ "$(niri msg --json focused-window | jq -r '.id // empty')" == "$zellij_window" ]] || {
+  echo "Niri left the Zellij window" >&2
+  exit 1
+}
+printf '  %s -> %s -> %s, Niri stayed on %s\n' \
+  "$zellij_right" "$zellij_left" "$zellij_right" "$zellij_window"
+
+echo "live navigation transitions passed"

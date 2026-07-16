@@ -40,6 +40,15 @@ installed desktop mode uses `FocusColumnOrMonitorLeft/Right` and
 layout. These actions are the final fallthrough after Neovim and Zellij have
 no neighbor; they do not alter nested routing.
 
+## Live transition tests
+
+The opt-in `scripts/test-live` harness launches disposable Ghostty surfaces for
+direct Neovim and Zellij. Each scenario records the initial nested focus,
+sends the normal one-byte navigation client message, queries authoritative
+Neovim RPC or Zellij JSON state, and compares the resulting nested and Niri
+focus with the expected transition. Pure graph tests cover rapid optimistic
+sequences without requiring a compositor.
+
 ## Identity
 
 Niri windows use compositor window IDs. Zellij clients use session name plus

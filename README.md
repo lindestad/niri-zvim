@@ -88,5 +88,11 @@ Run the checks and latency benchmarks with:
     cargo clippy -p niri-zvim-zellij --target wasm32-wasip1 -- -D warnings
     scripts/bench
 
+On a running Niri desktop, `scripts/test-live` launches disposable Ghostty
+windows and verifies direct Neovim and Zellij transitions through their RPC and
+JSON state APIs. It closes only the test windows/sessions and restores the
+previously focused Niri window. Run it with a normal Niri window focused, not
+from overview or while a layer-shell surface owns keyboard focus.
+
 The benchmark suite measures both in-memory optimistic routing and the Unix
 socket connect/write operation used by a keypress.
