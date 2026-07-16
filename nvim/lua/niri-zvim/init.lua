@@ -8,7 +8,7 @@ local instance_id = string.format("nvim-%d-%d", vim.fn.getpid(), uv.hrtime())
 local current_state
 local reconnect_timer
 local publish_pending = false
-local terminal_focused = false
+local terminal_focused = true
 
 local function socket_path()
   return vim.env.NIRI_ZVIM_SOCKET
