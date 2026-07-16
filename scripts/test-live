@@ -9,11 +9,14 @@ config_home="${XDG_CONFIG_HOME:-$HOME/.config}"
 daemon_config="${NIRI_ZVIM_CONFIG:-$config_home/niri-zvim/config.json}"
 ghostty_config="$project_dir/tests/ghostty.config"
 terminal_fixture="$project_dir/tests/fixtures/terminal"
+nvim_fixture="$project_dir/tests/fixtures/nvim.lua"
 tag="$$"
-case_timeout_seconds="${NIRI_ZVIM_LIVE_TIMEOUT:-10}"
+operation_timeout_seconds=10
+case_timeout_seconds="${NIRI_ZVIM_LIVE_TIMEOUT:-60}"
 case_state_file="$runtime_dir/niri-zvim-live-$tag.state"
+case_debug_file="$runtime_dir/niri-zvim-live-$tag.debug"
 
-for command in ghostty jq niri niri-zvim nvim systemctl timeout zellij; do
+for command in ghostty jq niri niri-zvim nvim pkill systemctl timeout zellij; do
   command -v "$command" >/dev/null || {
     echo "$command is required" >&2
     exit 1
@@ -49,14 +52,15 @@ original_workspaces="$(niri msg --json workspaces)"
 
 restore_focus() {
   niri msg action focus-window --id "$original_window" >/dev/null 2>&1 || true
-  rm -f "$case_state_file"
+  rm -f "$case_state_file" "$case_debug_file"
 }
 trap restore_focus EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
 launch_ghostty() {
-  ghostty +new-window \
+  timeout --signal=TERM --kill-after=2s "${operation_timeout_seconds}s" \
+    ghostty +new-window \
     --config-default-files=false \
     --config-file="$ghostty_config" \
     -e "$@"
@@ -98,7 +102,7 @@ dump_live_state() {
   for socket in "$runtime_dir"/niri-zvim-live-"$tag"*.sock; do
     [[ -S "$socket" ]] || continue
     printf '  Neovim %s: ' "$(basename "$socket")" >&2
-    timeout 1s nvim --headless --server "$socket" --remote-expr \
+    timeout 1s nvim --headless --clean --server "$socket" --remote-expr \
       'json_encode(#{focused: win_getid(), windows: map(getwininfo(), {_, v -> v.winid})})' \
       2>/dev/null >&2 || echo unavailable >&2
   done
@@ -174,7 +178,8 @@ wait_for_windows_gone() {
 nvim_remote_expr() {
   local socket="$1"
   local expression="$2"
-  nvim --headless --server "$socket" --remote-expr "$expression"
+  timeout --signal=TERM --kill-after=2s "${operation_timeout_seconds}s" \
+    nvim --headless --clean --server "$socket" --remote-expr "$expression"
 }
 
 nvim_window_ids() {
@@ -199,13 +204,15 @@ wait_for_nvim_count() {
 
 focused_zellij_pane() {
   local session="$1"
-  zellij --session "$session" action list-panes --all --json 2>/dev/null |
-    jq -r '.[] | select((.is_plugin | not) and .is_focused) | .id'
+  timeout --signal=TERM --kill-after=2s "${operation_timeout_seconds}s" \
+    zellij --session "$session" action list-panes --all --json 2>/dev/null |
+    jq -r '[.[] | select((.is_plugin | not) and .is_focused)] | first | .id // empty'
 }
 
 zellij_pane_ids() {
   local session="$1"
-  zellij --session "$session" action list-panes --all --json 2>/dev/null |
+  timeout --signal=TERM --kill-after=2s "${operation_timeout_seconds}s" \
+    zellij --session "$session" action list-panes --all --json 2>/dev/null |
     jq -r '[.[] | select((.is_plugin | not) and .is_selectable and (.is_suppressed | not))]
       | sort_by(.pane_x) | .[].id'
 }
@@ -213,7 +220,8 @@ zellij_pane_ids() {
 wait_for_zellij_session() {
   local session="$1"
   for _ in {1..150}; do
-    zellij list-sessions --short --no-formatting 2>/dev/null |
+    timeout --signal=TERM --kill-after=2s "${operation_timeout_seconds}s" \
+      zellij list-sessions --short --no-formatting 2>/dev/null |
       grep -qx "$session" && return 0
     sleep 0.05
   done
@@ -237,7 +245,8 @@ wait_for_zellij_count() {
 focus_zellij_pane() {
   local session="$1"
   local pane="$2"
-  zellij --session "$session" action focus-pane-id "$pane" >/dev/null
+  timeout --signal=TERM --kill-after=2s "${operation_timeout_seconds}s" \
+    zellij --session "$session" action focus-pane-id "$pane" >/dev/null
   for _ in {1..150}; do
     [[ "$(focused_zellij_pane "$session")" == "$pane" ]] && {
       sleep 0.1
@@ -339,7 +348,9 @@ launch_terminal() {
   local pid_file="$2"
   mark_state "launching empty terminal $title"
   launch_ghostty "$terminal_fixture" "$title" "$pid_file"
+  mark_state "waiting for empty terminal process $title"
   wait_for_file "$pid_file"
+  mark_state "waiting for empty terminal Niri window $title"
   launched_window="$(wait_for_window "$title" exact)"
   mark_state "empty terminal $title is ready as Niri window $launched_window"
 }
@@ -348,16 +359,19 @@ launch_nvim() {
   local title="$1"
   local socket="$2"
   local count="$3"
-  local layout='set splitright | only'
+  local layout='set splitright'
   local _
   for ((_ = 1; _ < count; _++)); do
     layout+=' | vsplit'
   done
   mark_state "launching $count-window Neovim $title"
-  launch_ghostty nvim --listen "$socket" \
+  launch_ghostty nvim -u "$nvim_fixture" --noplugin --listen "$socket" \
     -c "set title titlestring=$title | $layout"
+  mark_state "waiting for Neovim socket $title"
   wait_for_socket "$socket"
+  mark_state "waiting for $count Neovim windows in $title"
   wait_for_nvim_count "$socket" "$count"
+  mark_state "waiting for Neovim Niri window $title"
   launched_window="$(wait_for_window "$title" exact)"
   mark_state "Neovim $title is ready as Niri window $launched_window"
 }
@@ -366,8 +380,11 @@ launch_zellij() {
   local session="$1"
   mark_state "launching Zellij session $session"
   launch_ghostty zellij --session "$session"
+  mark_state "waiting for Zellij session $session"
   wait_for_zellij_session "$session"
+  mark_state "waiting for Zellij Niri window $session"
   launched_window="$(wait_for_window "$session" contains)"
+  mark_state "waiting for initial Zellij pane in $session"
   wait_for_zellij_count "$session" 1
   sleep 0.6
   mark_state "Zellij $session is ready as Niri window $launched_window"
@@ -412,7 +429,8 @@ navigate_expect() {
   local direction="$2"
   shift 2
   mark_state "navigating $direction: $label"
-  niri-zvim "$direction"
+  timeout --signal=TERM --kill-after=2s "${operation_timeout_seconds}s" \
+    niri-zvim "$direction"
   expect_state "$label" "$@"
   mark_state "completed: $label"
 }
@@ -421,7 +439,8 @@ cleanup_case() {
   local status=$?
   local socket session pid_file pid workspace
   if ((status != 0)); then
-    dump_live_state "case exited with status $status before cleanup"
+    dump_live_state "case exited with status $status before cleanup" \
+      >"$case_debug_file" 2>&1
   fi
   for socket in "${nvim_sockets[@]}"; do
     if [[ -S "$socket" ]]; then
@@ -431,6 +450,8 @@ cleanup_case() {
   for session in "${zellij_sessions[@]}"; do
     zellij kill-session "$session" >/dev/null 2>&1 || true
     zellij delete-session "$session" --force >/dev/null 2>&1 || true
+    pkill -TERM -f -- "^zellij --session $session pipe --name niri-zvim$" \
+      >/dev/null 2>&1 || true
   done
   for pid_file in "${terminal_pid_files[@]}"; do
     if [[ -s "$pid_file" ]]; then
@@ -603,9 +624,11 @@ test_zellij_three_panes() (
   zellij_window="$launched_window"
   test_windows+=("$zellij_window")
   move_window_column_last "$zellij_window"
-  zellij --session "$session" action new-pane --direction right >/dev/null
+  timeout --signal=TERM --kill-after=2s "${operation_timeout_seconds}s" \
+    zellij --session "$session" action new-pane --direction right >/dev/null
   wait_for_zellij_count "$session" 2
-  zellij --session "$session" action new-pane --direction right >/dev/null
+  timeout --signal=TERM --kill-after=2s "${operation_timeout_seconds}s" \
+    zellij --session "$session" action new-pane --direction right >/dev/null
   wait_for_zellij_count "$session" 3
   launch_terminal "$prefix-right" "$right_pid"
   right="$launched_window"
@@ -658,12 +681,15 @@ test_nested_nvim_in_zellij() (
   zellij_window="$launched_window"
   test_windows+=("$zellij_window")
   move_window_column_last "$zellij_window"
-  zellij --session "$session" action new-pane --direction right --close-on-exit -- \
-    nvim --listen "$socket" -c 'set splitright | only | vsplit | vsplit' >/dev/null
+  timeout --signal=TERM --kill-after=2s "${operation_timeout_seconds}s" \
+    zellij --session "$session" action new-pane --direction right --close-on-exit -- \
+    nvim -u "$nvim_fixture" --noplugin --listen "$socket" \
+    -c 'set splitright | vsplit | vsplit' >/dev/null
   wait_for_socket "$socket"
   wait_for_nvim_count "$socket" 3
   wait_for_zellij_count "$session" 2
-  zellij --session "$session" action new-pane --direction right >/dev/null
+  timeout --signal=TERM --kill-after=2s "${operation_timeout_seconds}s" \
+    zellij --session "$session" action new-pane --direction right >/dev/null
   wait_for_zellij_count "$session" 3
   launch_terminal "$prefix-right" "$right_pid"
   right="$launched_window"
@@ -778,6 +804,7 @@ run_case() {
   local function="$2"
   local status
   printf '\n-- %s --\n' "$name"
+  rm -f "$case_debug_file"
   mark_state "starting case: $name"
   timeout --signal=TERM --kill-after=8s "${case_timeout_seconds}s" \
     bash -c "$function"
@@ -787,16 +814,23 @@ run_case() {
   elif ((status == 124)); then
     failures+=("$name (timed out after ${case_timeout_seconds}s)")
     printf 'TIMEOUT: %s exceeded %ss\n' "$name" "$case_timeout_seconds" >&2
+    if [[ -s "$case_debug_file" ]]; then
+      sed 's/^/  /' "$case_debug_file" >&2
+    fi
   else
     failures+=("$name")
     printf 'FAIL: %s\n' "$name" >&2
+    if [[ -s "$case_debug_file" ]]; then
+      sed 's/^/  /' "$case_debug_file" >&2
+    fi
   fi
 }
 
 while read -r _ _ function; do
   export -f "${function?}"
 done < <(declare -F)
-export project_dir runtime_dir ghostty_config terminal_fixture tag case_state_file
+export project_dir runtime_dir ghostty_config terminal_fixture nvim_fixture tag
+export operation_timeout_seconds case_state_file case_debug_file
 export original_window original_windows original_workspaces
 
 cat <<'EOF'
@@ -805,9 +839,9 @@ named Niri workspaces. Do not use the mouse or keyboard until the final
 PASS/FAIL summary appears; changing focus can produce incorrect results.
 Only test processes and test workspace names are removed during cleanup.
 EOF
-printf 'Each case has a %s-second deadline and prints a state snapshot before cleanup\n' \
+printf 'Each operation has a 10-second deadline; each complete case has a %s-second safety cap.\n' \
   "$case_timeout_seconds"
-echo "if it fails or times out."
+echo "Failures print a serialized state snapshot before the next case starts."
 
 run_case "empty terminals and direct Neovim matrix" test_direct_terminal_matrix
 run_case "single-pane Zellij boundaries" test_zellij_single_pane
