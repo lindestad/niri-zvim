@@ -10,6 +10,13 @@ test_zellij_three_panes() (
   local left_pid="$runtime_dir/$prefix-left.pid"
   local right_pid="$runtime_dir/$prefix-right.pid"
   local session="$prefix-session"
+  local layout_string='layout {
+    pane split_direction="vertical" {
+        pane focus=true
+        pane
+        pane
+    }
+}'
   terminal_pid_files+=("$left_pid" "$right_pid")
   zellij_sessions+=("$session")
 
@@ -21,16 +28,10 @@ test_zellij_three_panes() (
   name_focused_workspace "$workspace"
   test_workspaces+=("$workspace")
   move_window_column_last "$left"
-  launch_zellij "$session"
+  launch_zellij "$session" 3 "$layout_string"
   zellij_window="$launched_window"
   test_windows+=("$zellij_window")
   move_window_column_last "$zellij_window"
-  timeout --signal=TERM --kill-after=2s "${operation_timeout_seconds}s" \
-    zellij --session "$session" action new-pane --direction right >/dev/null
-  wait_for_zellij_count "$session" 2
-  timeout --signal=TERM --kill-after=2s "${operation_timeout_seconds}s" \
-    zellij --session "$session" action new-pane --direction right >/dev/null
-  wait_for_zellij_count "$session" 3
   launch_terminal "$prefix-right" "$right_pid"
   right="$launched_window"
   test_windows+=("$right")
@@ -38,7 +39,6 @@ test_zellij_three_panes() (
 
   local -a panes
   mapfile -t panes < <(zellij_pane_ids "$session")
-  focus_zellij_pane "$session" "${panes[0]}"
   focus_niri_window "$left"
   navigate_expect "enter left Zellij pane" right \
     "$zellij_window" "$session" "${panes[0]}" - -

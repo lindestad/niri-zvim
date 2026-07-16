@@ -11,6 +11,12 @@ test_nested_nvim_in_zellij() (
   local right_pid="$runtime_dir/$prefix-right.pid"
   local session="$prefix-session"
   local socket="$runtime_dir/$prefix-nvim.sock"
+  local quoted_nvim_fixture quoted_socket quoted_command layout_string
+  quoted_nvim_fixture="$(jq -Rn --arg value "$nvim_fixture" '$value')"
+  quoted_socket="$(jq -Rn --arg value "$socket" '$value')"
+  quoted_command="$(jq -Rn --arg value 'set splitright | vsplit | vsplit' '$value')"
+  printf -v layout_string 'layout {\n    pane split_direction="vertical" {\n        pane focus=true\n        pane command="nvim" close_on_exit=true {\n            args "-u" %s "--noplugin" "--listen" %s "-c" %s\n        }\n        pane\n    }\n}' \
+    "$quoted_nvim_fixture" "$quoted_socket" "$quoted_command"
   terminal_pid_files+=("$left_pid" "$right_pid")
   zellij_sessions+=("$session")
   nvim_sockets+=("$socket")
@@ -23,20 +29,12 @@ test_nested_nvim_in_zellij() (
   name_focused_workspace "$workspace"
   test_workspaces+=("$workspace")
   move_window_column_last "$left"
-  launch_zellij "$session"
+  launch_zellij "$session" 3 "$layout_string"
   zellij_window="$launched_window"
   test_windows+=("$zellij_window")
   move_window_column_last "$zellij_window"
-  timeout --signal=TERM --kill-after=2s "${operation_timeout_seconds}s" \
-    zellij --session "$session" action new-pane --direction right --close-on-exit -- \
-    nvim -u "$nvim_fixture" --noplugin --listen "$socket" \
-    -c 'set splitright | vsplit | vsplit' >/dev/null
   wait_for_socket "$socket"
   wait_for_nvim_count "$socket" 3
-  wait_for_zellij_count "$session" 2
-  timeout --signal=TERM --kill-after=2s "${operation_timeout_seconds}s" \
-    zellij --session "$session" action new-pane --direction right >/dev/null
-  wait_for_zellij_count "$session" 3
   launch_terminal "$prefix-right" "$right_pid"
   right="$launched_window"
   test_windows+=("$right")
@@ -46,7 +44,6 @@ test_nested_nvim_in_zellij() (
   mapfile -t panes < <(zellij_pane_ids "$session")
   mapfile -t nvim_ids < <(nvim_window_ids "$socket")
   focus_nvim_window "$socket" "${nvim_ids[0]}"
-  focus_zellij_pane "$session" "${panes[0]}"
   focus_niri_window "$left"
   navigate_expect "enter nested Zellij at left shell" right \
     "$zellij_window" "$session" "${panes[0]}" - -

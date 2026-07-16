@@ -186,22 +186,6 @@ wait_for_zellij_count() {
   return 1
 }
 
-focus_zellij_pane() {
-  local session="$1"
-  local pane="$2"
-  timeout --signal=TERM --kill-after=2s "${operation_timeout_seconds}s" \
-    zellij --session "$session" action focus-pane-id "$pane" >/dev/null
-  for _ in {1..150}; do
-    [[ "$(focused_zellij_pane "$session")" == "$pane" ]] && {
-      sleep 0.1
-      return 0
-    }
-    sleep 0.02
-  done
-  echo "could not focus Zellij pane $pane in $session" >&2
-  return 1
-}
-
 focus_nvim_window() {
   local socket="$1"
   local window="$2"
@@ -304,8 +288,8 @@ launch_nvim() {
   local socket="$2"
   local count="$3"
   local layout='set splitright'
-  local _
-  for ((_ = 1; _ < count; _++)); do
+  local split_index
+  for ((split_index = 1; split_index < count; split_index++)); do
     layout+=' | vsplit'
   done
   mark_state "launching $count-window Neovim $title"
@@ -322,14 +306,22 @@ launch_nvim() {
 
 launch_zellij() {
   local session="$1"
+  local expected_panes="$2"
+  local layout_string="${3:-}"
+  local layout_file="$runtime_dir/$session.kdl"
   mark_state "launching Zellij session $session"
-  launch_ghostty zellij --session "$session"
+  if [[ -n "$layout_string" ]]; then
+    printf '%s\n' "$layout_string" >"$layout_file"
+    launch_ghostty zellij --session "$session" --new-session-with-layout "$layout_file"
+  else
+    launch_ghostty zellij --session "$session"
+  fi
   mark_state "waiting for Zellij session $session"
   wait_for_zellij_session "$session"
   mark_state "waiting for Zellij Niri window $session"
   launched_window="$(wait_for_window "$session" contains)"
-  mark_state "waiting for initial Zellij pane in $session"
-  wait_for_zellij_count "$session" 1
+  mark_state "waiting for $expected_panes initial Zellij panes in $session"
+  wait_for_zellij_count "$session" "$expected_panes"
   sleep 0.6
   mark_state "Zellij $session is ready as Niri window $launched_window"
 }
@@ -376,6 +368,7 @@ navigate_expect() {
   timeout --signal=TERM --kill-after=2s "${operation_timeout_seconds}s" \
     niri-zvim "$direction"
   expect_state "$label" "$@"
+  sleep 0.1
   mark_state "completed: $label"
 }
 
@@ -412,6 +405,7 @@ cleanup_case() {
   for pid_file in "${terminal_pid_files[@]}"; do
     rm -f "$pid_file"
   done
+  rm -f "$runtime_dir"/niri-zvim-live-"$tag"-*.kdl
 }
 
 begin_case() {

@@ -21,7 +21,7 @@ test_zellij_single_pane() (
   name_focused_workspace "$workspace"
   test_workspaces+=("$workspace")
   move_window_column_last "$left"
-  launch_zellij "$session"
+  launch_zellij "$session" 1
   zellij_window="$launched_window"
   test_windows+=("$zellij_window")
   move_window_column_last "$zellij_window"
@@ -30,7 +30,6 @@ test_zellij_single_pane() (
   test_windows+=("$right")
   move_window_column_last "$right"
   pane="$(zellij_pane_ids "$session")"
-  focus_zellij_pane "$session" "$pane"
   focus_niri_window "$left"
 
   navigate_expect "enter single-pane Zellij" right \
