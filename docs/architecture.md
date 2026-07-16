@@ -17,13 +17,20 @@ cached graph from the inside out:
 
 Every command has a predicted transition. The daemon applies that transition
 before dispatch, permitting key-repeat to remain pipelined. Adapter snapshots
-carry monotonically increasing revisions and replace predictions whenever the
-real state differs.
+carry monotonically increasing revisions. A snapshot must advance beyond the
+current revision to replace it; an equal-revision observation may have been
+captured before the predicted command and cannot rewind that prediction.
+Neovim and Zellij snapshots also report the latest daemon command sequence
+they have applied. An acknowledging snapshot becomes the authoritative base,
+and predictions for any later pending commands are replayed on top of it. If
+an adapter event is coalesced, an observation matching a stored expected target
+implicitly acknowledges the corresponding prefix of the pending queue.
 
 This means acknowledgements are not a queue barrier. If two requests arrive
 before the first focus event, the second request is routed against the first
-request's predicted state. Niri focus events and adapter snapshots are ordered
-authoritative observations; pending predictions are replayed on top of them.
+request's predicted state. Niri focus events and explicitly acknowledged
+adapter snapshots are authoritative observations; later pending predictions
+are replayed on top of them.
 
 The keypress path performs no process discovery and invokes no Zellij or
 Neovim command-line client. It is one short Unix-socket write followed by an
@@ -46,8 +53,11 @@ The opt-in `scripts/test-live` harness launches disposable Ghostty surfaces for
 direct Neovim and Zellij. Each scenario records the initial nested focus,
 sends the normal one-byte navigation client message, queries authoritative
 Neovim RPC or Zellij JSON state, and compares the resulting nested and Niri
-focus with the expected transition. Pure graph tests cover rapid optimistic
-sequences without requiring a compositor.
+focus with the expected transition. Burst scenarios also send complete direct,
+Zellij, and nested paths without waiting between commands, then verify every
+layer after one final convergence wait. Pure graph tests cover the same routing
+invariants without requiring a compositor. See [live-testing.md](live-testing.md)
+for fixture design, race regressions, and diagnostics.
 
 ## Identity
 

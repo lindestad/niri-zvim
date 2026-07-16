@@ -9,6 +9,9 @@ local current_state
 local reconnect_timer
 local publish_pending = false
 local terminal_focused = true
+local navigation_queue = {}
+local navigation_pending = false
+local acknowledged_sequence
 
 local function socket_path()
   return vim.env.NIRI_ZVIM_SOCKET
@@ -107,6 +110,7 @@ local function snapshot()
     parent = parent(),
     terminal_focused = terminal_focused,
     revision = revision,
+    acknowledged_sequence = acknowledged_sequence or vim.NIL,
     focused_window = vim.api.nvim_get_current_win(),
     window_neighbors = build_neighbors(),
   }
@@ -126,17 +130,34 @@ local function schedule_snapshot()
 end
 
 local function navigate(direction)
-  if not current_state then
-    snapshot()
-  end
-  local focused = tostring(current_state.focused_window)
-  local neighbors = current_state.window_neighbors[focused]
+  local focused = tostring(vim.api.nvim_get_current_win())
+  local neighbors = build_neighbors()[focused]
   local target = neighbors and neighbors[direction]
   if target and target ~= vim.NIL and vim.api.nvim_win_is_valid(target) then
     vim.api.nvim_set_current_win(target)
   end
   revision = revision + 1
-  snapshot()
+end
+
+local function queue_navigation(sequence, direction)
+  navigation_queue[#navigation_queue + 1] = {
+    sequence = sequence,
+    direction = direction,
+  }
+  if navigation_pending then
+    return
+  end
+  navigation_pending = true
+  vim.schedule(function()
+    navigation_pending = false
+    local queued = navigation_queue
+    navigation_queue = {}
+    for _, queued_navigation in ipairs(queued) do
+      navigate(queued_navigation.direction)
+      acknowledged_sequence = queued_navigation.sequence
+    end
+    snapshot()
+  end)
 end
 
 local function consume(data)
@@ -150,9 +171,7 @@ local function consume(data)
     input = input:sub(newline + 1)
     local ok, message = pcall(vim.json.decode, line)
     if ok and message.type == "navigate" then
-      vim.schedule(function()
-        navigate(message.direction)
-      end)
+      queue_navigation(message.sequence, message.direction)
     end
   end
 end

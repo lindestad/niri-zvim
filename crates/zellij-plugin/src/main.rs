@@ -21,6 +21,8 @@ struct Plugin {
     session: Option<String>,
     niri_window_id: Option<u64>,
     revision: u64,
+    pending_sequence: Option<u64>,
+    acknowledged_sequence: Option<u64>,
     pipe_id: Option<String>,
     input: String,
     publish_retries: u8,
@@ -69,6 +71,9 @@ impl ZellijPlugin for Plugin {
             }
             Event::PaneUpdate(manifest) => {
                 self.pane_manifest = Some(manifest);
+                if let Some(sequence) = self.pending_sequence.take() {
+                    self.acknowledged_sequence = Some(sequence);
+                }
                 self.revision = self.revision.wrapping_add(1);
                 self.state_changed();
             }
@@ -119,7 +124,11 @@ impl Plugin {
                 self.session = Some(session);
                 self.defer_publish();
             }
-            DaemonMessage::Navigate { direction, .. } => {
+            DaemonMessage::Navigate {
+                sequence,
+                direction,
+            } => {
+                self.pending_sequence = Some(sequence);
                 move_focus(match direction {
                     niri_zvim_core::Direction::Left => ZellijDirection::Left,
                     niri_zvim_core::Direction::Down => ZellijDirection::Down,
@@ -205,6 +214,7 @@ impl Plugin {
                 },
                 niri_window_id,
                 revision: self.revision,
+                acknowledged_sequence: self.acknowledged_sequence,
                 focused_pane,
                 pane_neighbors,
             },

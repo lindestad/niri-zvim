@@ -21,6 +21,7 @@ fn graph() -> NavigationGraph {
         parent: NvimParent::NiriWindow(1),
         terminal_focused: true,
         revision: 0,
+        acknowledged_sequence: None,
         focused_window: 1,
         window_neighbors: BTreeMap::from([
             (

@@ -49,36 +49,30 @@ impl NavigationGraph {
         let accept = self
             .zellij
             .get(&state.client)
-            .is_none_or(|current| state.revision >= current.revision);
+            .is_none_or(|current| state.revision > current.revision);
         if accept {
             self.zellij.insert(state.client.clone(), state);
         }
     }
 
+    pub fn acknowledge_zellij(&mut self, state: ZellijClientState) {
+        self.zellij.insert(state.client.clone(), state);
+    }
+
     pub fn update_nvim(&mut self, mut state: NvimInstance) {
-        if matches!(state.parent, NvimParent::FocusedNiriWindow) {
-            state.parent = self
-                .nvim
-                .get(&state.id)
-                .and_then(|current| match &current.parent {
-                    NvimParent::FocusedNiriWindow => None,
-                    parent => Some(parent.clone()),
-                })
-                .or_else(|| {
-                    state
-                        .terminal_focused
-                        .then(|| self.focused_niri_window.map(NvimParent::NiriWindow))
-                        .flatten()
-                })
-                .unwrap_or(NvimParent::FocusedNiriWindow);
-        }
+        self.resolve_nvim_parent(&mut state);
         let accept = self
             .nvim
             .get(&state.id)
-            .is_none_or(|current| state.revision >= current.revision);
+            .is_none_or(|current| state.revision > current.revision);
         if accept {
             self.nvim.insert(state.id.clone(), state);
         }
+    }
+
+    pub fn acknowledge_nvim(&mut self, mut state: NvimInstance) {
+        self.resolve_nvim_parent(&mut state);
+        self.nvim.insert(state.id.clone(), state);
     }
 
     pub fn remove_nvim(&mut self, id: &str) {
@@ -89,6 +83,22 @@ impl NavigationGraph {
         if let Some(current) = self.focused_niri_window {
             self.move_niri_prediction(current, direction);
         }
+    }
+
+    pub fn predict_zellij_focus(&mut self, client: &ZellijClient, direction: Direction) -> bool {
+        self.move_zellij_prediction(client, direction)
+    }
+
+    pub fn predict_nvim_focus(&mut self, id: &str, direction: Direction) -> bool {
+        self.move_nvim_prediction(id, direction)
+    }
+
+    pub fn zellij_focus(&self, client: &ZellijClient) -> Option<u32> {
+        self.zellij.get(client).map(|state| state.focused_pane)
+    }
+
+    pub fn nvim_focus(&self, id: &str) -> Option<u64> {
+        self.nvim.get(id).map(|state| state.focused_window)
     }
 
     pub fn route_optimistically(
@@ -122,6 +132,26 @@ impl NavigationGraph {
             .values()
             .find(|state| state.niri_window_id == window_id)
             .map(|state| (state.client.clone(), state.focused_pane))
+    }
+
+    fn resolve_nvim_parent(&self, state: &mut NvimInstance) {
+        if !matches!(state.parent, NvimParent::FocusedNiriWindow) {
+            return;
+        }
+        state.parent = self
+            .nvim
+            .get(&state.id)
+            .and_then(|current| match &current.parent {
+                NvimParent::FocusedNiriWindow => None,
+                parent => Some(parent.clone()),
+            })
+            .or_else(|| {
+                state
+                    .terminal_focused
+                    .then(|| self.focused_niri_window.map(NvimParent::NiriWindow))
+                    .flatten()
+            })
+            .unwrap_or(NvimParent::FocusedNiriWindow);
     }
 
     fn direct_nvim(&self, window_id: u64) -> Option<String> {
@@ -227,6 +257,7 @@ mod tests {
             client: client.clone(),
             niri_window_id: 1,
             revision: 1,
+            acknowledged_sequence: None,
             focused_pane: 10,
             pane_neighbors: BTreeMap::from([(
                 "10".into(),
@@ -244,6 +275,7 @@ mod tests {
             },
             terminal_focused: false,
             revision: 1,
+            acknowledged_sequence: None,
             focused_window: 100,
             window_neighbors: BTreeMap::from([(
                 "100".into(),
@@ -310,6 +342,34 @@ mod tests {
     }
 
     #[test]
+    fn equal_revision_snapshot_does_not_rewind_a_prediction() {
+        let mut graph = nested_graph(Some(101), Some(11));
+        let stale_nvim = graph.nvim["nvim-a"].clone();
+        let client = stale_nvim.parent.clone();
+
+        assert!(matches!(
+            graph.route_optimistically(Direction::Right),
+            Ok(NavigationAction::Nvim { .. })
+        ));
+        graph.update_nvim(NvimInstance {
+            revision: graph.nvim["nvim-a"].revision,
+            ..stale_nvim
+        });
+        assert_eq!(graph.nvim["nvim-a"].focused_window, 101);
+
+        let NvimParent::ZellijPane { client, .. } = client else {
+            unreachable!()
+        };
+        let stale_zellij = graph.zellij[&client].clone();
+        assert!(graph.move_zellij_prediction(&client, Direction::Right));
+        graph.update_zellij(ZellijClientState {
+            revision: graph.zellij[&client].revision,
+            ..stale_zellij
+        });
+        assert_eq!(graph.zellij[&client].focused_pane, 11);
+    }
+
+    #[test]
     fn cli_snapshot_wins_over_stale_plugin_snapshot() {
         let mut graph = nested_graph(None, None);
         graph.update_zellij(ZellijClientState {
@@ -319,6 +379,7 @@ mod tests {
             },
             niri_window_id: 1,
             revision: 1,
+            acknowledged_sequence: None,
             focused_pane: 10,
             pane_neighbors: BTreeMap::from([(
                 "10".into(),
@@ -347,6 +408,7 @@ mod tests {
             parent: NvimParent::FocusedNiriWindow,
             terminal_focused: true,
             revision: 1,
+            acknowledged_sequence: None,
             focused_window: 100,
             window_neighbors: BTreeMap::new(),
         };
@@ -371,6 +433,7 @@ mod tests {
             parent: NvimParent::FocusedNiriWindow,
             terminal_focused: false,
             revision: 1,
+            acknowledged_sequence: None,
             focused_window: 100,
             window_neighbors: BTreeMap::new(),
         });
@@ -389,6 +452,7 @@ mod tests {
             parent: NvimParent::FocusedNiriWindow,
             terminal_focused: true,
             revision: 1,
+            acknowledged_sequence: None,
             focused_window: 100,
             window_neighbors: BTreeMap::new(),
         });

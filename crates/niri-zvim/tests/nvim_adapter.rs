@@ -8,7 +8,7 @@ use std::{
 use niri_zvim_core::{AdapterMessage, DaemonMessage, Direction};
 
 #[test]
-fn nvim_publishes_topology_and_accepts_navigation() {
+fn nvim_publishes_topology_and_drains_queued_navigation() {
     let temp = tempfile::tempdir().unwrap();
     let socket_path = temp.path().join("daemon.sock");
     let listener = UnixListener::bind(&socket_path).unwrap();
@@ -23,7 +23,7 @@ fn nvim_publishes_topology_and_accepts_navigation() {
             "--cmd",
             &format!("set runtimepath+={}", plugin.display()),
             "--cmd",
-            "vsplit",
+            "set splitright | vsplit | vsplit",
         ])
         .env("NIRI_ZVIM_SOCKET", &socket_path)
         .stdin(Stdio::null())
@@ -45,28 +45,54 @@ fn nvim_publishes_topology_and_accepts_navigation() {
     let initial = loop {
         let message = read_message(&mut reader);
         if let AdapterMessage::NvimSnapshot { state } = message
-            && state.window_neighbors.len() == 2
+            && state.window_neighbors.len() == 3
         {
             break state;
         }
     };
-    let neighbors = &initial.window_neighbors[&initial.focused_window.to_string()];
-    let direction = Direction::ALL
+    let (direction, first_target, final_target) = Direction::ALL
         .into_iter()
-        .find(|direction| neighbors.get(*direction).is_some())
-        .expect("a two-split layout has a directional neighbor");
-    let command = DaemonMessage::Navigate {
-        sequence: 1,
-        direction,
-    };
-    writeln!(writer, "{}", serde_json::to_string(&command).unwrap()).unwrap();
+        .find_map(|direction| {
+            let first = initial.window_neighbors[&initial.focused_window.to_string()]
+                .get(direction)
+                .copied()?;
+            let second = initial.window_neighbors[&first.to_string()]
+                .get(direction)
+                .copied()?;
+            Some((direction, first, second))
+        })
+        .expect("a three-split layout has two neighbors in one direction");
+    let commands = [
+        DaemonMessage::Navigate {
+            sequence: 1,
+            direction,
+        },
+        DaemonMessage::Navigate {
+            sequence: 2,
+            direction,
+        },
+    ];
+    let encoded = commands
+        .iter()
+        .map(|command| serde_json::to_string(command).unwrap())
+        .collect::<Vec<_>>()
+        .join("\n");
+    writeln!(writer, "{encoded}").unwrap();
 
     loop {
-        let message = read_message(&mut reader);
-        if let AdapterMessage::NvimSnapshot { state } = message
-            && state.focused_window != initial.focused_window
-        {
-            break;
+        if let AdapterMessage::NvimSnapshot { state } = read_message(&mut reader) {
+            if state.focused_window == final_target {
+                assert_eq!(state.acknowledged_sequence, Some(2));
+                break;
+            }
+            assert_ne!(
+                state.focused_window, initial.focused_window,
+                "queued navigation returned to its initial window"
+            );
+            assert_eq!(
+                state.focused_window, first_target,
+                "queued navigation focused an unrelated window"
+            );
         }
     }
 

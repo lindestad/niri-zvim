@@ -1,7 +1,7 @@
 use std::{collections::HashMap, sync::mpsc, thread, time::Duration};
 
 use niri_ipc::{
-    Action, Event, Request, Response, Window,
+    Action, Event, Request, Response, Window, WindowLayout,
     socket::Socket,
     state::{EventStreamState, EventStreamStatePart},
 };
@@ -137,19 +137,13 @@ fn convert_windows<'a>(
     let mut by_workspace: HashMap<Option<u64>, Vec<(u64, Rect)>> = HashMap::new();
 
     for window in &windows {
-        let Some((x, y)) = window.layout.tile_pos_in_workspace_view else {
+        let Some(rect) = layout_rect(&window.layout) else {
             continue;
         };
-        let (width, height) = window.layout.tile_size;
-        by_workspace.entry(window.workspace_id).or_default().push((
-            window.id,
-            Rect {
-                x,
-                y,
-                width,
-                height,
-            },
-        ));
+        by_workspace
+            .entry(window.workspace_id)
+            .or_default()
+            .push((window.id, rect));
     }
 
     let mut neighbors: HashMap<u64, NeighborMap<u64>> = HashMap::new();
@@ -167,6 +161,24 @@ fn convert_windows<'a>(
         })
         .collect();
     (converted, focused)
+}
+
+fn layout_rect(layout: &WindowLayout) -> Option<Rect> {
+    if let Some((x, y)) = layout.tile_pos_in_workspace_view {
+        let (width, height) = layout.tile_size;
+        return Some(Rect {
+            x,
+            y,
+            width,
+            height,
+        });
+    }
+    layout.pos_in_scrolling_layout.map(|(column, tile)| Rect {
+        x: column as f64,
+        y: tile as f64,
+        width: 1.0,
+        height: 1.0,
+    })
 }
 
 #[cfg(test)]
@@ -196,5 +208,20 @@ mod tests {
             niri_action(mode.get(Direction::Up)),
             Action::FocusWindowOrWorkspaceUp {}
         ));
+    }
+
+    #[test]
+    fn scrolling_layout_position_is_used_when_pixel_position_is_absent() {
+        let layout = WindowLayout {
+            pos_in_scrolling_layout: Some((3, 2)),
+            tile_size: (900.0, 700.0),
+            window_size: (898, 698),
+            tile_pos_in_workspace_view: None,
+            window_offset_in_tile: (1.0, 1.0),
+        };
+
+        let rect = layout_rect(&layout).unwrap();
+        assert_eq!((rect.x, rect.y), (3.0, 2.0));
+        assert_eq!((rect.width, rect.height), (1.0, 1.0));
     }
 }

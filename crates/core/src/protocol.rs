@@ -106,6 +106,8 @@ pub struct ZellijClientState {
     pub client: ZellijClient,
     pub niri_window_id: u64,
     pub revision: Revision,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub acknowledged_sequence: Option<u64>,
     pub focused_pane: PaneId,
     pub pane_neighbors: BTreeMap<String, NeighborMap<PaneId>>,
 }
@@ -117,6 +119,8 @@ pub struct NvimInstance {
     #[serde(default)]
     pub terminal_focused: bool,
     pub revision: Revision,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub acknowledged_sequence: Option<u64>,
     pub focused_window: u64,
     pub window_neighbors: BTreeMap<String, NeighborMap<u64>>,
 }

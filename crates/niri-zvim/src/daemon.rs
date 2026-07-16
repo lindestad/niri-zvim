@@ -26,6 +26,13 @@ use crate::{
 
 type Sink = mpsc::UnboundedSender<DaemonMessage>;
 
+#[derive(Clone, Copy)]
+struct PendingNavigation {
+    sequence: u64,
+    direction: Direction,
+    expected: u64,
+}
+
 pub(crate) enum DaemonEvent {
     Navigate(Direction),
     NiriSnapshot {
@@ -49,6 +56,8 @@ struct Daemon {
     zellij: BTreeMap<ZellijClient, Sink>,
     sequence: u64,
     pending_niri: VecDeque<Direction>,
+    pending_nvim: BTreeMap<String, VecDeque<PendingNavigation>>,
+    pending_zellij: BTreeMap<ZellijClient, VecDeque<PendingNavigation>>,
 }
 
 impl Daemon {
@@ -60,6 +69,8 @@ impl Daemon {
             zellij: BTreeMap::new(),
             sequence: 0,
             pending_niri: VecDeque::new(),
+            pending_nvim: BTreeMap::new(),
+            pending_zellij: BTreeMap::new(),
         }
     }
 
@@ -80,7 +91,10 @@ impl Daemon {
                 }
             }
             DaemonEvent::Adapter { message, sink } => self.update_adapter(message, sink),
-            DaemonEvent::ZellijBridgeStopped { .. } => {}
+            DaemonEvent::ZellijBridgeStopped { session } => {
+                self.pending_zellij
+                    .retain(|client, _| client.session != session);
+            }
         }
     }
 
@@ -88,6 +102,11 @@ impl Daemon {
         self.sequence = self.sequence.wrapping_add(1);
         let sequence = self.sequence;
         let Ok(action) = self.graph.route_optimistically(direction) else {
+            debug!(
+                ?direction,
+                pending = self.pending_niri.len(),
+                "Niri focus unknown; routing directly to Niri"
+            );
             self.niri.navigate(direction);
             return;
         };
@@ -99,21 +118,54 @@ impl Daemon {
                 self.niri.navigate(direction);
                 true
             }
-            NavigationAction::Nvim { id, direction } => self.nvim.get(&id).is_some_and(|sink| {
-                sink.send(DaemonMessage::Navigate {
-                    sequence,
-                    direction,
-                })
-                .is_ok()
-            }),
-            NavigationAction::Zellij { client, direction } => {
-                self.zellij.get(&client).is_some_and(|sink| {
+            NavigationAction::Nvim { id, direction } => {
+                let sent = self.nvim.get(&id).is_some_and(|sink| {
                     sink.send(DaemonMessage::Navigate {
                         sequence,
                         direction,
                     })
                     .is_ok()
-                })
+                });
+                if sent {
+                    let expected = self
+                        .graph
+                        .nvim_focus(&id)
+                        .expect("routed Neovim instance remains in the graph");
+                    self.pending_nvim
+                        .entry(id)
+                        .or_default()
+                        .push_back(PendingNavigation {
+                            sequence,
+                            direction,
+                            expected,
+                        });
+                }
+                sent
+            }
+            NavigationAction::Zellij { client, direction } => {
+                let sent = self.zellij.get(&client).is_some_and(|sink| {
+                    sink.send(DaemonMessage::Navigate {
+                        sequence,
+                        direction,
+                    })
+                    .is_ok()
+                });
+                if sent {
+                    let expected = u64::from(
+                        self.graph
+                            .zellij_focus(&client)
+                            .expect("routed Zellij client remains in the graph"),
+                    );
+                    self.pending_zellij
+                        .entry(client)
+                        .or_default()
+                        .push_back(PendingNavigation {
+                            sequence,
+                            direction,
+                            expected,
+                        });
+                }
+                sent
             }
         };
 
@@ -131,8 +183,28 @@ impl Daemon {
     fn update_adapter(&mut self, message: AdapterMessage, sink: Sink) {
         match message {
             AdapterMessage::NvimSnapshot { state } => {
-                self.nvim.insert(state.id.clone(), sink);
-                self.graph.update_nvim(state);
+                let id = state.id.clone();
+                self.nvim.insert(id.clone(), sink);
+                let sequence_acknowledged = state.acknowledged_sequence.is_some_and(|sequence| {
+                    acknowledge_pending(self.pending_nvim.get_mut(&id), sequence)
+                });
+                let observed_acknowledged =
+                    acknowledge_observed(self.pending_nvim.get_mut(&id), state.focused_window);
+                let acknowledged = sequence_acknowledged || observed_acknowledged;
+                let has_pending = self
+                    .pending_nvim
+                    .get(&id)
+                    .is_some_and(|pending| !pending.is_empty());
+                if acknowledged || has_pending {
+                    self.graph.acknowledge_nvim(state);
+                } else {
+                    self.graph.update_nvim(state);
+                }
+                if let Some(pending) = self.pending_nvim.get(&id) {
+                    for navigation in pending {
+                        self.graph.predict_nvim_focus(&id, navigation.direction);
+                    }
+                }
             }
             AdapterMessage::ZellijSnapshot { state } => {
                 debug!(
@@ -143,14 +215,126 @@ impl Daemon {
                     focused_pane = state.focused_pane,
                     "received Zellij snapshot"
                 );
-                self.zellij.insert(state.client.clone(), sink);
-                self.graph.update_zellij(state);
+                let client = state.client.clone();
+                self.zellij.insert(client.clone(), sink);
+                let sequence_acknowledged = state.acknowledged_sequence.is_some_and(|sequence| {
+                    acknowledge_pending(self.pending_zellij.get_mut(&client), sequence)
+                });
+                let observed_acknowledged = acknowledge_observed(
+                    self.pending_zellij.get_mut(&client),
+                    u64::from(state.focused_pane),
+                );
+                let acknowledged = sequence_acknowledged || observed_acknowledged;
+                let has_pending = self
+                    .pending_zellij
+                    .get(&client)
+                    .is_some_and(|pending| !pending.is_empty());
+                if acknowledged || has_pending {
+                    self.graph.acknowledge_zellij(state);
+                } else {
+                    self.graph.update_zellij(state);
+                }
+                if let Some(pending) = self.pending_zellij.get(&client) {
+                    for navigation in pending {
+                        self.graph
+                            .predict_zellij_focus(&client, navigation.direction);
+                    }
+                }
             }
             AdapterMessage::NvimClosed { id } => {
                 self.nvim.remove(&id);
+                self.pending_nvim.remove(&id);
                 self.graph.remove_nvim(&id);
             }
         }
+    }
+}
+
+fn acknowledge_pending(
+    pending: Option<&mut VecDeque<PendingNavigation>>,
+    acknowledged_sequence: u64,
+) -> bool {
+    let Some(pending) = pending else {
+        return false;
+    };
+    let before = pending.len();
+    while pending
+        .front()
+        .is_some_and(|navigation| navigation.sequence <= acknowledged_sequence)
+    {
+        pending.pop_front();
+    }
+    before != pending.len()
+}
+
+fn acknowledge_observed(pending: Option<&mut VecDeque<PendingNavigation>>, observed: u64) -> bool {
+    let Some(pending) = pending else {
+        return false;
+    };
+    let Some(position) = pending
+        .iter()
+        .rposition(|navigation| navigation.expected == observed)
+    else {
+        return false;
+    };
+    pending.drain(..=position);
+    true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn adapter_acknowledgement_clears_every_covered_prediction() {
+        let mut pending = VecDeque::from([
+            PendingNavigation {
+                sequence: 4,
+                direction: Direction::Right,
+                expected: 11,
+            },
+            PendingNavigation {
+                sequence: 5,
+                direction: Direction::Right,
+                expected: 12,
+            },
+            PendingNavigation {
+                sequence: 7,
+                direction: Direction::Left,
+                expected: 11,
+            },
+        ]);
+
+        assert!(acknowledge_pending(Some(&mut pending), 5));
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending.front().unwrap().sequence, 7);
+        assert!(!acknowledge_pending(Some(&mut pending), 5));
+    }
+
+    #[test]
+    fn observed_target_acknowledges_the_matching_prediction_prefix() {
+        let mut pending = VecDeque::from([
+            PendingNavigation {
+                sequence: 4,
+                direction: Direction::Right,
+                expected: 11,
+            },
+            PendingNavigation {
+                sequence: 5,
+                direction: Direction::Right,
+                expected: 12,
+            },
+            PendingNavigation {
+                sequence: 6,
+                direction: Direction::Right,
+                expected: 13,
+            },
+        ]);
+
+        assert!(acknowledge_observed(Some(&mut pending), 12));
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending.front().unwrap().expected, 13);
+        assert!(!acknowledge_observed(Some(&mut pending), 12));
     }
 }
 

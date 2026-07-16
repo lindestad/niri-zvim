@@ -175,31 +175,24 @@ async fn run_bridge(
     let mut lines = BufReader::new(stdout).lines();
     while let Some(line) = lines.next_line().await? {
         match serde_json::from_str::<AdapterMessage>(&line) {
+            Ok(AdapterMessage::ZellijSnapshot { mut state }) => {
+                state.client.client_id = 0;
+                state.niri_window_id = window_id;
+                state.revision = revisions.fetch_add(1, Ordering::Relaxed) + 1;
+                events
+                    .send(DaemonEvent::Adapter {
+                        message: AdapterMessage::ZellijSnapshot { state },
+                        sink: sink.clone(),
+                    })
+                    .await?;
+            }
             Ok(message) => {
-                let refresh = matches!(message, AdapterMessage::ZellijSnapshot { .. });
                 events
                     .send(DaemonEvent::Adapter {
                         message,
                         sink: sink.clone(),
                     })
                     .await?;
-                if refresh {
-                    let revision = revisions.fetch_add(1, Ordering::Relaxed) + 1;
-                    let session = session.to_owned();
-                    let events = events.clone();
-                    let sink = sink.clone();
-                    tokio::spawn(async move {
-                        if let Ok(mut state) = query_snapshot(&session, window_id, 0).await {
-                            state.revision = revision;
-                            let _ = events
-                                .send(DaemonEvent::Adapter {
-                                    message: AdapterMessage::ZellijSnapshot { state },
-                                    sink,
-                                })
-                                .await;
-                        }
-                    });
-                }
             }
             Err(error) => debug!(%error, %line, "ignored invalid Zellij bridge output"),
         }
@@ -377,6 +370,7 @@ fn snapshot_from_panes(
         },
         niri_window_id: window_id,
         revision: 0,
+        acknowledged_sequence: None,
         focused_pane: focused.id,
         pane_neighbors,
     })
