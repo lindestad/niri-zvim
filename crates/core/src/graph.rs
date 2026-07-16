@@ -85,6 +85,10 @@ impl NavigationGraph {
         }
     }
 
+    pub fn niri_focus(&self) -> Option<u64> {
+        self.focused_niri_window
+    }
+
     pub fn predict_zellij_focus(&mut self, client: &ZellijClient, direction: Direction) -> bool {
         self.move_zellij_prediction(client, direction)
     }

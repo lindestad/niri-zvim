@@ -15,21 +15,34 @@ use crate::{
 };
 
 pub struct NiriExecutor {
-    actions: mpsc::Sender<Direction>,
+    actions: mpsc::Sender<NiriCommand>,
+}
+
+#[derive(Clone, Copy)]
+struct NiriCommand {
+    sequence: u64,
+    direction: Direction,
 }
 
 impl NiriExecutor {
-    pub fn start(mode: NavigationMode) -> Self {
+    pub fn start(mode: NavigationMode, events: Sender<DaemonEvent>) -> Self {
         let (actions, receiver) = mpsc::channel();
         thread::Builder::new()
             .name("niri-zvim-actions".into())
-            .spawn(move || action_loop(receiver, mode))
+            .spawn(move || action_loop(receiver, mode, events))
             .expect("failed to start niri action thread");
         Self { actions }
     }
 
-    pub fn navigate(&self, direction: Direction) {
-        if self.actions.send(direction).is_err() {
+    pub fn navigate(&self, sequence: u64, direction: Direction) {
+        if self
+            .actions
+            .send(NiriCommand {
+                sequence,
+                direction,
+            })
+            .is_err()
+        {
             warn!("niri action worker stopped");
         }
     }
@@ -70,22 +83,29 @@ fn event_stream(events: &Sender<DaemonEvent>) -> anyhow::Result<()> {
                 | Event::WindowClosed { .. }
                 | Event::WindowFocusChanged { .. }
         );
-        let acknowledges_focus = matches!(event, Event::WindowFocusChanged { .. });
         state.apply(event);
         if is_window_event {
             let (windows, focused) = convert_windows(state.windows.windows.values());
             events.blocking_send(DaemonEvent::NiriSnapshot {
                 windows,
                 focused,
-                acknowledges_focus,
+                acknowledged_sequence: None,
             })?;
         }
     }
 }
 
-fn action_loop(receiver: mpsc::Receiver<Direction>, mode: NavigationMode) {
+fn action_loop(
+    receiver: mpsc::Receiver<NiriCommand>,
+    mode: NavigationMode,
+    events: Sender<DaemonEvent>,
+) {
     let mut socket = None;
-    while let Ok(direction) = receiver.recv() {
+    while let Ok(NiriCommand {
+        sequence,
+        direction,
+    }) = receiver.recv()
+    {
         let request = Request::Action(niri_action(mode.get(direction)));
 
         if socket.is_none() {
@@ -97,18 +117,42 @@ fn action_loop(receiver: mpsc::Receiver<Direction>, mode: NavigationMode) {
                 }
             }
         }
-        let result = socket
+        let mut result = socket
             .as_mut()
             .expect("socket was initialized")
             .send(request.clone());
         if let Err(error) = result {
             debug!(%error, "reconnecting niri action socket");
             socket = Socket::connect().ok();
-            let retry = socket.as_mut().map(|connection| connection.send(request));
-            if let Some(Err(error)) = retry {
+            result = socket
+                .as_mut()
+                .map_or_else(|| Err(error), |connection| connection.send(request));
+            if let Err(error) = &result {
                 debug!(%error, "retrying niri action failed");
                 socket = None;
             }
+        }
+        if !matches!(result, Ok(Ok(Response::Handled))) {
+            continue;
+        }
+        let snapshot = socket
+            .as_mut()
+            .and_then(|connection| connection.send(Request::Windows).ok())
+            .and_then(Result::ok);
+        let Some(Response::Windows(windows)) = snapshot else {
+            warn!(sequence, "could not snapshot Niri after navigation");
+            continue;
+        };
+        let (windows, focused) = convert_windows(windows.iter());
+        if events
+            .blocking_send(DaemonEvent::NiriSnapshot {
+                windows,
+                focused,
+                acknowledged_sequence: Some(sequence),
+            })
+            .is_err()
+        {
+            break;
         }
     }
 }

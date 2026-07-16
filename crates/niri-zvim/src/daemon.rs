@@ -33,12 +33,19 @@ struct PendingNavigation {
     expected: u64,
 }
 
+#[derive(Clone, Copy)]
+struct PendingNiriNavigation {
+    sequence: u64,
+    direction: Direction,
+    expected: Option<u64>,
+}
+
 pub(crate) enum DaemonEvent {
     Navigate(Direction),
     NiriSnapshot {
         windows: Vec<NiriWindow>,
         focused: Option<u64>,
-        acknowledges_focus: bool,
+        acknowledged_sequence: Option<u64>,
     },
     Adapter {
         message: AdapterMessage,
@@ -55,7 +62,7 @@ struct Daemon {
     nvim: BTreeMap<String, Sink>,
     zellij: BTreeMap<ZellijClient, Sink>,
     sequence: u64,
-    pending_niri: VecDeque<Direction>,
+    pending_niri: VecDeque<PendingNiriNavigation>,
     pending_nvim: BTreeMap<String, VecDeque<PendingNavigation>>,
     pending_zellij: BTreeMap<ZellijClient, VecDeque<PendingNavigation>>,
 }
@@ -80,14 +87,16 @@ impl Daemon {
             DaemonEvent::NiriSnapshot {
                 windows,
                 focused,
-                acknowledges_focus,
+                acknowledged_sequence,
             } => {
-                self.graph.replace_niri_windows(windows, focused);
-                if acknowledges_focus {
-                    self.pending_niri.pop_front();
+                if let Some(sequence) = acknowledged_sequence {
+                    acknowledge_niri_pending(&mut self.pending_niri, sequence);
+                } else {
+                    acknowledge_niri_observed(&mut self.pending_niri, focused);
                 }
-                for direction in self.pending_niri.iter().copied() {
-                    self.graph.predict_niri_focus(direction);
+                self.graph.replace_niri_windows(windows, focused);
+                for navigation in &self.pending_niri {
+                    self.graph.predict_niri_focus(navigation.direction);
                 }
             }
             DaemonEvent::Adapter { message, sink } => self.update_adapter(message, sink),
@@ -107,15 +116,19 @@ impl Daemon {
                 pending = self.pending_niri.len(),
                 "Niri focus unknown; routing directly to Niri"
             );
-            self.niri.navigate(direction);
+            self.niri.navigate(sequence, direction);
             return;
         };
         debug!(?direction, ?action, "routed navigation");
 
         let sent = match action {
             NavigationAction::Niri { direction } => {
-                self.pending_niri.push_back(direction);
-                self.niri.navigate(direction);
+                self.pending_niri.push_back(PendingNiriNavigation {
+                    sequence,
+                    direction,
+                    expected: self.graph.niri_focus(),
+                });
+                self.niri.navigate(sequence, direction);
                 true
             }
             NavigationAction::Nvim { id, direction } => {
@@ -174,9 +187,13 @@ impl Daemon {
                 ?direction,
                 "nested executor unavailable; falling back to niri"
             );
-            self.pending_niri.push_back(direction);
             self.graph.predict_niri_focus(direction);
-            self.niri.navigate(direction);
+            self.pending_niri.push_back(PendingNiriNavigation {
+                sequence,
+                direction,
+                expected: self.graph.niri_focus(),
+            });
+            self.niri.navigate(sequence, direction);
         }
     }
 
@@ -248,6 +265,28 @@ impl Daemon {
             }
         }
     }
+}
+
+fn acknowledge_niri_pending(
+    pending: &mut VecDeque<PendingNiriNavigation>,
+    acknowledged_sequence: u64,
+) {
+    while pending
+        .front()
+        .is_some_and(|navigation| navigation.sequence <= acknowledged_sequence)
+    {
+        pending.pop_front();
+    }
+}
+
+fn acknowledge_niri_observed(pending: &mut VecDeque<PendingNiriNavigation>, observed: Option<u64>) {
+    let Some(position) = pending
+        .iter()
+        .rposition(|navigation| navigation.expected == observed)
+    else {
+        return;
+    };
+    pending.drain(..=position);
 }
 
 fn acknowledge_pending(
@@ -336,6 +375,56 @@ mod tests {
         assert_eq!(pending.front().unwrap().expected, 13);
         assert!(!acknowledge_observed(Some(&mut pending), 12));
     }
+
+    #[test]
+    fn niri_action_snapshot_clears_no_op_and_covered_predictions() {
+        let mut pending = VecDeque::from([
+            PendingNiriNavigation {
+                sequence: 4,
+                direction: Direction::Up,
+                expected: None,
+            },
+            PendingNiriNavigation {
+                sequence: 5,
+                direction: Direction::Down,
+                expected: Some(12),
+            },
+            PendingNiriNavigation {
+                sequence: 7,
+                direction: Direction::Left,
+                expected: Some(11),
+            },
+        ]);
+
+        acknowledge_niri_pending(&mut pending, 5);
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending.front().unwrap().sequence, 7);
+    }
+
+    #[test]
+    fn niri_focus_event_acknowledges_matching_prediction_prefix() {
+        let mut pending = VecDeque::from([
+            PendingNiriNavigation {
+                sequence: 4,
+                direction: Direction::Up,
+                expected: Some(10),
+            },
+            PendingNiriNavigation {
+                sequence: 5,
+                direction: Direction::Up,
+                expected: Some(11),
+            },
+            PendingNiriNavigation {
+                sequence: 6,
+                direction: Direction::Left,
+                expected: Some(12),
+            },
+        ]);
+
+        acknowledge_niri_observed(&mut pending, Some(11));
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending.front().unwrap().expected, Some(12));
+    }
 }
 
 pub async fn run_daemon() -> anyhow::Result<()> {
@@ -351,7 +440,7 @@ pub async fn run_daemon() -> anyhow::Result<()> {
     start_event_thread(events_tx.clone());
     tokio::spawn(accept_loop(listener, events_tx.clone()));
 
-    let mut daemon = Daemon::new(NiriExecutor::start(niri_mode));
+    let mut daemon = Daemon::new(NiriExecutor::start(niri_mode, events_tx.clone()));
     let mut zellij = BridgeManager::default();
     while let Some(event) = events_rx.recv().await {
         if let DaemonEvent::NiriSnapshot { windows, .. } = &event {
