@@ -31,6 +31,15 @@ in-memory graph transition. The daemon keeps a persistent Niri action socket,
 a persistent pipe per observed Zellij session, and a persistent socket per
 Neovim instance.
 
+## Niri modes
+
+Named modes map each direction to a Niri IPC action. The internal default is
+workspace-local (`FocusColumnLeft/Right` and `FocusWindowUp/Down`). The
+installed desktop mode uses `FocusColumnOrMonitorLeft/Right` and
+`FocusWindowOrWorkspaceUp/Down`, matching a multi-monitor vertical-workspace
+layout. These actions are the final fallthrough after Neovim and Zellij have
+no neighbor; they do not alter nested routing.
+
 ## Identity
 
 Niri windows use compositor window IDs. Zellij clients use session name plus

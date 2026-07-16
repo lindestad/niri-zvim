@@ -9,18 +9,21 @@ use niri_zvim_core::{Direction, NeighborMap, NiriWindow, Rect, directional_neigh
 use tokio::sync::mpsc::Sender;
 use tracing::{debug, warn};
 
-use crate::daemon::DaemonEvent;
+use crate::{
+    config::{NavigationMode, NiriNavigation},
+    daemon::DaemonEvent,
+};
 
 pub struct NiriExecutor {
     actions: mpsc::Sender<Direction>,
 }
 
 impl NiriExecutor {
-    pub fn start() -> Self {
+    pub fn start(mode: NavigationMode) -> Self {
         let (actions, receiver) = mpsc::channel();
         thread::Builder::new()
             .name("niri-zvim-actions".into())
-            .spawn(move || action_loop(receiver))
+            .spawn(move || action_loop(receiver, mode))
             .expect("failed to start niri action thread");
         Self { actions }
     }
@@ -80,15 +83,10 @@ fn event_stream(events: &Sender<DaemonEvent>) -> anyhow::Result<()> {
     }
 }
 
-fn action_loop(receiver: mpsc::Receiver<Direction>) {
+fn action_loop(receiver: mpsc::Receiver<Direction>, mode: NavigationMode) {
     let mut socket = None;
     while let Ok(direction) = receiver.recv() {
-        let request = Request::Action(match direction {
-            Direction::Left => Action::FocusColumnLeft {},
-            Direction::Down => Action::FocusWindowDown {},
-            Direction::Up => Action::FocusWindowUp {},
-            Direction::Right => Action::FocusColumnRight {},
-        });
+        let request = Request::Action(niri_action(mode.get(direction)));
 
         if socket.is_none() {
             match Socket::connect() {
@@ -112,6 +110,19 @@ fn action_loop(receiver: mpsc::Receiver<Direction>) {
                 socket = None;
             }
         }
+    }
+}
+
+fn niri_action(navigation: NiriNavigation) -> Action {
+    match navigation {
+        NiriNavigation::ColumnLeft => Action::FocusColumnLeft {},
+        NiriNavigation::ColumnRight => Action::FocusColumnRight {},
+        NiriNavigation::ColumnOrMonitorLeft => Action::FocusColumnOrMonitorLeft {},
+        NiriNavigation::ColumnOrMonitorRight => Action::FocusColumnOrMonitorRight {},
+        NiriNavigation::WindowDown => Action::FocusWindowDown {},
+        NiriNavigation::WindowUp => Action::FocusWindowUp {},
+        NiriNavigation::WindowOrWorkspaceDown => Action::FocusWindowOrWorkspaceDown {},
+        NiriNavigation::WindowOrWorkspaceUp => Action::FocusWindowOrWorkspaceUp {},
     }
 }
 
@@ -164,12 +175,26 @@ mod tests {
 
     #[test]
     fn direction_maps_to_expected_niri_action() {
-        let action = match Direction::Right {
-            Direction::Left => Action::FocusColumnLeft {},
-            Direction::Down => Action::FocusWindowDown {},
-            Direction::Up => Action::FocusWindowUp {},
-            Direction::Right => Action::FocusColumnRight {},
-        };
+        let action = niri_action(NavigationMode::workspace_local().get(Direction::Right));
         assert!(matches!(action, Action::FocusColumnRight {}));
+    }
+
+    #[test]
+    fn desktop_mode_maps_to_monitor_and_workspace_actions() {
+        let mode = NavigationMode {
+            left: NiriNavigation::ColumnOrMonitorLeft,
+            down: NiriNavigation::WindowOrWorkspaceDown,
+            up: NiriNavigation::WindowOrWorkspaceUp,
+            right: NiriNavigation::ColumnOrMonitorRight,
+        };
+
+        assert!(matches!(
+            niri_action(mode.get(Direction::Left)),
+            Action::FocusColumnOrMonitorLeft {}
+        ));
+        assert!(matches!(
+            niri_action(mode.get(Direction::Up)),
+            Action::FocusWindowOrWorkspaceUp {}
+        ));
     }
 }

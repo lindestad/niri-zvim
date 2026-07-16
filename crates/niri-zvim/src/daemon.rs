@@ -18,6 +18,7 @@ use tokio::{
 use tracing::{debug, info, warn};
 
 use crate::{
+    config::Config,
     niri::{NiriExecutor, start_event_thread},
     socket::{adapter_magic, socket_path},
     zellij::BridgeManager,
@@ -51,10 +52,10 @@ struct Daemon {
 }
 
 impl Daemon {
-    fn new() -> Self {
+    fn new(niri: NiriExecutor) -> Self {
         Self {
             graph: NavigationGraph::default(),
-            niri: NiriExecutor::start(),
+            niri,
             nvim: BTreeMap::new(),
             zellij: BTreeMap::new(),
             sequence: 0,
@@ -154,6 +155,8 @@ impl Daemon {
 }
 
 pub async fn run_daemon() -> anyhow::Result<()> {
+    let niri_mode = Config::load()?.active_mode()?;
+    info!(?niri_mode, "loaded Niri navigation mode");
     let path = socket_path();
     remove_stale_socket(&path)?;
     let listener =
@@ -164,7 +167,7 @@ pub async fn run_daemon() -> anyhow::Result<()> {
     start_event_thread(events_tx.clone());
     tokio::spawn(accept_loop(listener, events_tx.clone()));
 
-    let mut daemon = Daemon::new();
+    let mut daemon = Daemon::new(NiriExecutor::start(niri_mode));
     let mut zellij = BridgeManager::default();
     while let Some(event) = events_rx.recv().await {
         if let DaemonEvent::NiriSnapshot { windows, .. } = &event {

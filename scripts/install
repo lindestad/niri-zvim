@@ -8,6 +8,7 @@ bin_dir="$HOME/.local/bin"
 zellij_plugin_dir="$config_home/zellij/plugins"
 nvim_site_dir="$data_home/nvim/site"
 systemd_dir="$config_home/systemd/user"
+niri_zvim_config_dir="$config_home/niri-zvim"
 
 command -v cargo >/dev/null || {
   echo "cargo is required" >&2
@@ -37,6 +38,7 @@ mkdir -p \
   "$zellij_plugin_dir" \
   "$nvim_site_dir/lua" \
   "$nvim_site_dir/plugin" \
+  "$niri_zvim_config_dir" \
   "$systemd_dir"
 install -m 0755 "$project_dir/target/native/release/niri-zvim" "$bin_dir/niri-zvim"
 install -m 0755 "$project_dir/target/native/release/niri-zvimd" "$bin_dir/niri-zvimd"
@@ -44,6 +46,9 @@ install -m 0644 \
   "$project_dir/target/wasm32-wasip1/release/niri-zvim-zellij.wasm" \
   "$zellij_plugin_dir/niri-zvim.wasm"
 install -m 0644 "$project_dir/systemd/niri-zvim.service" "$systemd_dir/niri-zvim.service"
+if [[ ! -e "$niri_zvim_config_dir/config.json" ]]; then
+  install -m 0644 "$project_dir/config/config.json" "$niri_zvim_config_dir/config.json"
+fi
 ln -sfn "$project_dir/nvim/lua/niri-zvim" "$nvim_site_dir/lua/niri-zvim"
 ln -sfn "$project_dir/nvim/plugin/niri-zvim.lua" "$nvim_site_dir/plugin/niri-zvim.lua"
 

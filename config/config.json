@@ -1,0 +1,17 @@
+{
+  "active_mode": "desktop",
+  "modes": {
+    "default": {
+      "left": "focus-column-left",
+      "down": "focus-window-down",
+      "up": "focus-window-up",
+      "right": "focus-column-right"
+    },
+    "desktop": {
+      "left": "focus-column-or-monitor-left",
+      "down": "focus-window-or-workspace-down",
+      "up": "focus-window-or-workspace-up",
+      "right": "focus-column-or-monitor-right"
+    }
+  }
+}

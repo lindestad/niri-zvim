@@ -24,8 +24,9 @@ systemd user services. Install the binaries, adapters, and daemon with:
 
 The installer puts the client and daemon in `~/.local/bin`, the Zellij plugin
 in `~/.config/zellij/plugins`, and the Neovim adapter in its user site runtime.
-It enables `niri-zvim.service` immediately and enables Ghostty's packaged
-user service for the next graphical login.
+It creates `~/.config/niri-zvim/config.json` when missing, enables
+`niri-zvim.service` immediately, and enables Ghostty's packaged user service
+for the next graphical login.
 
 Zellij requires a one-time interactive permission approval. From any Zellij
 session, run:
@@ -45,6 +46,38 @@ Bind the compositor keys to the client:
 
 For systemd-managed Ghostty, launch terminal windows with `ghostty +new-window`.
 Do not disable Ghostty's GTK single-instance mode.
+
+## Navigation modes
+
+The daemon reads named modes from `~/.config/niri-zvim/config.json`. Without a
+config file it uses workspace-local Niri navigation: Left/Right focus columns,
+and Up/Down focus windows without crossing a monitor or workspace boundary.
+
+The installed config selects the `desktop` mode, matching this layout:
+
+```json
+{
+  "active_mode": "desktop",
+  "modes": {
+    "default": {
+      "left": "focus-column-left",
+      "down": "focus-window-down",
+      "up": "focus-window-up",
+      "right": "focus-column-right"
+    },
+    "desktop": {
+      "left": "focus-column-or-monitor-left",
+      "down": "focus-window-or-workspace-down",
+      "up": "focus-window-or-workspace-up",
+      "right": "focus-column-or-monitor-right"
+    }
+  }
+}
+```
+
+Restart `niri-zvim.service` after changing the active mode. Niri fallthrough
+actions are sent over the daemon's persistent Niri IPC socket; no `niri msg`
+process is launched on a keypress.
 
 ## Development
 

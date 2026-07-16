@@ -1,3 +1,4 @@
+mod config;
 mod daemon;
 mod niri;
 mod socket;
