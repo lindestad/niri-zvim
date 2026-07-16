@@ -24,21 +24,14 @@ use crate::{
     zellij::BridgeManager,
 };
 
+use self::reconcile::{
+    PendingNavigation, PendingNiriNavigation, acknowledge_niri_observed, acknowledge_niri_pending,
+    acknowledge_observed, acknowledge_pending,
+};
+
+mod reconcile;
+
 type Sink = mpsc::UnboundedSender<DaemonMessage>;
-
-#[derive(Clone, Copy)]
-struct PendingNavigation {
-    sequence: u64,
-    direction: Direction,
-    expected: u64,
-}
-
-#[derive(Clone, Copy)]
-struct PendingNiriNavigation {
-    sequence: u64,
-    direction: Direction,
-    expected: Option<u64>,
-}
 
 pub(crate) enum DaemonEvent {
     Navigate(Direction),
@@ -264,166 +257,6 @@ impl Daemon {
                 self.graph.remove_nvim(&id);
             }
         }
-    }
-}
-
-fn acknowledge_niri_pending(
-    pending: &mut VecDeque<PendingNiriNavigation>,
-    acknowledged_sequence: u64,
-) {
-    while pending
-        .front()
-        .is_some_and(|navigation| navigation.sequence <= acknowledged_sequence)
-    {
-        pending.pop_front();
-    }
-}
-
-fn acknowledge_niri_observed(pending: &mut VecDeque<PendingNiriNavigation>, observed: Option<u64>) {
-    let Some(position) = pending
-        .iter()
-        .rposition(|navigation| navigation.expected == observed)
-    else {
-        return;
-    };
-    pending.drain(..=position);
-}
-
-fn acknowledge_pending(
-    pending: Option<&mut VecDeque<PendingNavigation>>,
-    acknowledged_sequence: u64,
-) -> bool {
-    let Some(pending) = pending else {
-        return false;
-    };
-    let before = pending.len();
-    while pending
-        .front()
-        .is_some_and(|navigation| navigation.sequence <= acknowledged_sequence)
-    {
-        pending.pop_front();
-    }
-    before != pending.len()
-}
-
-fn acknowledge_observed(pending: Option<&mut VecDeque<PendingNavigation>>, observed: u64) -> bool {
-    let Some(pending) = pending else {
-        return false;
-    };
-    let Some(position) = pending
-        .iter()
-        .rposition(|navigation| navigation.expected == observed)
-    else {
-        return false;
-    };
-    pending.drain(..=position);
-    true
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn adapter_acknowledgement_clears_every_covered_prediction() {
-        let mut pending = VecDeque::from([
-            PendingNavigation {
-                sequence: 4,
-                direction: Direction::Right,
-                expected: 11,
-            },
-            PendingNavigation {
-                sequence: 5,
-                direction: Direction::Right,
-                expected: 12,
-            },
-            PendingNavigation {
-                sequence: 7,
-                direction: Direction::Left,
-                expected: 11,
-            },
-        ]);
-
-        assert!(acknowledge_pending(Some(&mut pending), 5));
-        assert_eq!(pending.len(), 1);
-        assert_eq!(pending.front().unwrap().sequence, 7);
-        assert!(!acknowledge_pending(Some(&mut pending), 5));
-    }
-
-    #[test]
-    fn observed_target_acknowledges_the_matching_prediction_prefix() {
-        let mut pending = VecDeque::from([
-            PendingNavigation {
-                sequence: 4,
-                direction: Direction::Right,
-                expected: 11,
-            },
-            PendingNavigation {
-                sequence: 5,
-                direction: Direction::Right,
-                expected: 12,
-            },
-            PendingNavigation {
-                sequence: 6,
-                direction: Direction::Right,
-                expected: 13,
-            },
-        ]);
-
-        assert!(acknowledge_observed(Some(&mut pending), 12));
-        assert_eq!(pending.len(), 1);
-        assert_eq!(pending.front().unwrap().expected, 13);
-        assert!(!acknowledge_observed(Some(&mut pending), 12));
-    }
-
-    #[test]
-    fn niri_action_snapshot_clears_no_op_and_covered_predictions() {
-        let mut pending = VecDeque::from([
-            PendingNiriNavigation {
-                sequence: 4,
-                direction: Direction::Up,
-                expected: None,
-            },
-            PendingNiriNavigation {
-                sequence: 5,
-                direction: Direction::Down,
-                expected: Some(12),
-            },
-            PendingNiriNavigation {
-                sequence: 7,
-                direction: Direction::Left,
-                expected: Some(11),
-            },
-        ]);
-
-        acknowledge_niri_pending(&mut pending, 5);
-        assert_eq!(pending.len(), 1);
-        assert_eq!(pending.front().unwrap().sequence, 7);
-    }
-
-    #[test]
-    fn niri_focus_event_acknowledges_matching_prediction_prefix() {
-        let mut pending = VecDeque::from([
-            PendingNiriNavigation {
-                sequence: 4,
-                direction: Direction::Up,
-                expected: Some(10),
-            },
-            PendingNiriNavigation {
-                sequence: 5,
-                direction: Direction::Up,
-                expected: Some(11),
-            },
-            PendingNiriNavigation {
-                sequence: 6,
-                direction: Direction::Left,
-                expected: Some(12),
-            },
-        ]);
-
-        acknowledge_niri_observed(&mut pending, Some(11));
-        assert_eq!(pending.len(), 1);
-        assert_eq!(pending.front().unwrap().expected, Some(12));
     }
 }
 
