@@ -14,6 +14,8 @@ use crate::{
     daemon::DaemonEvent,
 };
 
+const SNAPSHOT_QUIET_PERIOD: Duration = Duration::from_millis(2);
+
 pub struct NiriExecutor {
     actions: mpsc::Sender<NiriCommand>,
 }
@@ -27,10 +29,15 @@ struct NiriCommand {
 impl NiriExecutor {
     pub fn start(mode: NavigationMode, events: Sender<DaemonEvent>) -> Self {
         let (actions, receiver) = mpsc::channel();
+        let (snapshots, snapshot_receiver) = mpsc::channel();
         thread::Builder::new()
             .name("niri-zvim-actions".into())
-            .spawn(move || action_loop(receiver, mode, events))
+            .spawn(move || action_loop(receiver, mode, snapshots))
             .expect("failed to start niri action thread");
+        thread::Builder::new()
+            .name("niri-zvim-snapshots".into())
+            .spawn(move || snapshot_loop(snapshot_receiver, events))
+            .expect("failed to start niri snapshot thread");
         Self { actions }
     }
 
@@ -98,7 +105,7 @@ fn event_stream(events: &Sender<DaemonEvent>) -> anyhow::Result<()> {
 fn action_loop(
     receiver: mpsc::Receiver<NiriCommand>,
     mode: NavigationMode,
-    events: Sender<DaemonEvent>,
+    snapshots: mpsc::Sender<u64>,
 ) {
     let mut socket = None;
     while let Ok(NiriCommand {
@@ -135,11 +142,17 @@ fn action_loop(
         if !matches!(result, Ok(Ok(Response::Handled))) {
             continue;
         }
-        let snapshot = socket
-            .as_mut()
-            .and_then(|connection| connection.send(Request::Windows).ok())
-            .and_then(Result::ok);
-        let Some(Response::Windows(windows)) = snapshot else {
+        if snapshots.send(sequence).is_err() {
+            break;
+        }
+    }
+}
+
+fn snapshot_loop(receiver: mpsc::Receiver<u64>, events: Sender<DaemonEvent>) {
+    let mut socket = None;
+    while let Ok(first_sequence) = receiver.recv() {
+        let sequence = coalesce_snapshot_sequence(first_sequence, &receiver);
+        let Some(windows) = request_windows(&mut socket) else {
             warn!(sequence, "could not snapshot Niri after navigation");
             continue;
         };
@@ -154,6 +167,29 @@ fn action_loop(
         {
             break;
         }
+    }
+}
+
+fn coalesce_snapshot_sequence(first: u64, receiver: &mpsc::Receiver<u64>) -> u64 {
+    let mut latest = first;
+    while let Ok(sequence) = receiver.recv_timeout(SNAPSHOT_QUIET_PERIOD) {
+        latest = sequence;
+    }
+    latest
+}
+
+fn request_windows(socket: &mut Option<Socket>) -> Option<Vec<Window>> {
+    if socket.is_none() {
+        *socket = Socket::connect().ok();
+    }
+    let mut response = socket.as_mut()?.send(Request::Windows);
+    if response.is_err() {
+        *socket = Socket::connect().ok();
+        response = socket.as_mut()?.send(Request::Windows);
+    }
+    match response.ok()?.ok()? {
+        Response::Windows(windows) => Some(windows),
+        _ => None,
     }
 }
 
@@ -228,6 +264,17 @@ fn layout_rect(layout: &WindowLayout) -> Option<Rect> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn snapshot_sequences_coalesce_to_the_latest_command() {
+        let (sender, receiver) = mpsc::channel();
+        sender.send(5).unwrap();
+        sender.send(8).unwrap();
+        drop(sender);
+
+        let first = receiver.recv().unwrap();
+        assert_eq!(coalesce_snapshot_sequence(first, &receiver), 8);
+    }
 
     #[test]
     fn direction_maps_to_expected_niri_action() {
