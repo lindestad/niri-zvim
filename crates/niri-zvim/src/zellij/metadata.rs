@@ -3,28 +3,18 @@ use std::{
     fs,
     hash::{Hash, Hasher},
     path::{Component, Path, PathBuf},
-    sync::{
-        Arc,
-        atomic::{AtomicU64, Ordering},
-    },
 };
 
-use niri_zvim_core::{AdapterMessage, DaemonMessage};
 use tokio::{
     sync::mpsc,
     time::{Duration, sleep},
 };
 
-use crate::daemon::DaemonEvent;
-
-use super::snapshot::query_snapshot;
+use super::bridge::RefreshEvent;
 
 pub(super) async fn watch_session_metadata(
     session: String,
-    window_id: u64,
-    events: mpsc::Sender<DaemonEvent>,
-    sink: mpsc::UnboundedSender<DaemonMessage>,
-    revisions: Arc<AtomicU64>,
+    refreshes: mpsc::UnboundedSender<RefreshEvent>,
 ) {
     let metadata = session_metadata_path(&session);
     let mut last_topology = metadata_topology_stamp(&metadata);
@@ -36,18 +26,7 @@ pub(super) async fn watch_session_metadata(
         }
         sleep(Duration::from_millis(20)).await;
         last_topology = metadata_topology_stamp(&metadata);
-        let Ok(mut state) = query_snapshot(&session, window_id, 0).await else {
-            continue;
-        };
-        state.revision = revisions.fetch_add(1, Ordering::Relaxed) + 1;
-        if events
-            .send(DaemonEvent::Adapter {
-                message: AdapterMessage::ZellijSnapshot { state },
-                sink: sink.clone(),
-            })
-            .await
-            .is_err()
-        {
+        if refreshes.send(RefreshEvent::MetadataChanged).is_err() {
             break;
         }
     }
@@ -76,6 +55,7 @@ fn metadata_topology_fingerprint(contents: &str) -> u64 {
         "are_floating_panes_visible ",
         "id ",
         "is_plugin ",
+        "is_focused ",
         "is_floating ",
         "is_suppressed ",
         "pane_x ",
@@ -146,17 +126,6 @@ mod tests {
         assert_ne!(
             metadata_topology_fingerprint(first),
             metadata_topology_fingerprint(resized)
-        );
-    }
-
-    #[test]
-    fn metadata_fingerprint_ignores_focus_only_changes() {
-        let first = "id 1\nis_focused false\npane_columns 40\n";
-        let focused = "id 1\nis_focused true\npane_columns 40\n";
-
-        assert_eq!(
-            metadata_topology_fingerprint(first),
-            metadata_topology_fingerprint(focused)
         );
     }
 }

@@ -15,14 +15,16 @@ use tokio::{
 const FALLBACK_REFRESH_DELAY: Duration = Duration::from_millis(50);
 
 #[derive(Clone, Copy)]
-enum RefreshEvent {
+pub(super) enum RefreshEvent {
     Navigate(u64),
     Acknowledge(u64),
+    MetadataChanged,
 }
 
 #[derive(Default)]
 struct RefreshState {
     pending_sequence: Option<u64>,
+    metadata_dirty: bool,
 }
 
 impl RefreshState {
@@ -42,7 +44,12 @@ impl RefreshState {
                 self.pending_sequence = None;
             }
             RefreshEvent::Acknowledge(_) => {}
+            RefreshEvent::MetadataChanged => self.metadata_dirty = true,
         }
+    }
+
+    fn needs_refresh(&self) -> bool {
+        self.pending_sequence.is_some() || self.metadata_dirty
     }
 }
 use tracing::{debug, info};
@@ -106,10 +113,7 @@ pub(super) async fn run_bridge(
 
     let metadata_watcher = tokio::spawn(watch_session_metadata(
         session.to_owned(),
-        window_id,
-        events.clone(),
-        sink.clone(),
-        revisions.clone(),
+        refresh_tx.clone(),
     ));
     let fallback_refresher = tokio::spawn(fallback_refresh_loop(
         session.to_owned(),
@@ -194,7 +198,7 @@ async fn fallback_refresh_loop(
     let mut state = RefreshState::default();
     while let Some(event) = refreshes.recv().await {
         state.update(event);
-        if state.pending_sequence.is_none() {
+        if !state.needs_refresh() {
             continue;
         }
 
@@ -208,7 +212,7 @@ async fn fallback_refresh_loop(
                     };
                     let reset = matches!(event, RefreshEvent::Navigate(_));
                     state.update(event);
-                    if state.pending_sequence.is_none() {
+                    if !state.needs_refresh() {
                         break;
                     }
                     if reset {
@@ -217,6 +221,7 @@ async fn fallback_refresh_loop(
                 }
                 () = &mut timer => {
                     state.pending_sequence = None;
+                    state.metadata_dirty = false;
                     let Ok(mut snapshot) = query_snapshot(&session, window_id, 0).await else {
                         break;
                     };
@@ -249,5 +254,8 @@ mod tests {
         assert_eq!(state.pending_sequence, Some(6));
         state.update(RefreshEvent::Acknowledge(6));
         assert_eq!(state.pending_sequence, None);
+
+        state.update(RefreshEvent::MetadataChanged);
+        assert!(state.needs_refresh());
     }
 }

@@ -223,6 +223,7 @@ impl Daemon {
                     window_id = state.niri_window_id,
                     revision = state.revision,
                     focused_pane = state.focused_pane,
+                    acknowledged_sequence = ?state.acknowledged_sequence,
                     "received Zellij snapshot"
                 );
                 let client = state.client.clone();
