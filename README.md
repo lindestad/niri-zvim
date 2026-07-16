@@ -88,6 +88,7 @@ benchmarks with:
 
     just test
     just bench
+    just bench-live
 
 The test command checks the required tool versions and active user services.
 For individual development checks, run:
@@ -115,5 +116,9 @@ configuration. Run one case in isolation with, for example,
 `scripts/test-live` handles preflight checks and orchestration. Shared fixture
 helpers and the individual scenario files live under `scripts/live-tests/`.
 
-The benchmark suite measures both in-memory optimistic routing and the Unix
-socket connect/write operation used by a keypress.
+The deterministic benchmark suite measures size-parameterized routing,
+topology construction, Unix socket dispatch, and the short-lived keypress
+client. `just bench-live` separately compares native and daemon-triggered Niri,
+Zellij, and Neovim focus convergence on the running desktop. See
+[docs/benchmarking.md](docs/benchmarking.md) for methodology and interpretation
+limits.

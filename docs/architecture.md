@@ -47,6 +47,14 @@ in-memory graph transition. The daemon keeps a persistent Niri action socket,
 a persistent pipe per observed Zellij session, and a persistent socket per
 Neovim instance.
 
+Executor reconciliation is deliberately outside the dispatch path. Niri uses
+separate persistent action and snapshot sockets, coalescing snapshot requests
+after a burst. Zellij plugin acknowledgements cancel a coalesced CLI fallback;
+focus and topology metadata changes share that same debounced query worker.
+Neovim and the Zellij plugin cache geometry-derived topology until structural
+state changes. Benchmark boundaries and interpretation are specified in
+[benchmarking.md](benchmarking.md).
+
 Zellij focus is scoped to a connected client, not the session as a whole.
 Session-wide pane metadata can mark several panes `is_focused` when diagnostic
 or bootstrap clients have different histories. The plugin queries the pane for

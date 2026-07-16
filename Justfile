@@ -11,6 +11,10 @@ install:
 bench:
     ./scripts/bench
 
+# Compare native and daemon navigation on the live desktop.
+bench-live:
+    ./scripts/bench-live
+
 # Run the complete automated and live desktop test suites.
 test:
     @source ./scripts/test-output; test_input_warning

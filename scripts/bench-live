@@ -1,0 +1,283 @@
+#!/usr/bin/env bash
+# Variables and assignments below are consumed by sourced live-test helpers.
+# shellcheck disable=SC1091,SC2030,SC2031,SC2034,SC2154
+set -euo pipefail
+
+project_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+live_tests_dir="$project_dir/scripts/live-tests"
+runtime_dir="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+ghostty_config="$project_dir/tests/ghostty.config"
+terminal_fixture="$project_dir/tests/fixtures/terminal"
+nvim_fixture="$project_dir/tests/fixtures/nvim.lua"
+sample_bin="$project_dir/target/release/live-bench-sample"
+client_bin="$project_dir/target/release/niri-zvim"
+tag="bench-$$"
+operation_timeout_seconds=3
+case_timeout_seconds=60
+case_state_file="$runtime_dir/niri-zvim-live-$tag.state"
+case_debug_file="$runtime_dir/niri-zvim-live-$tag.debug"
+samples="${NIRI_ZVIM_BENCH_SAMPLES:-12}"
+burst_samples="${NIRI_ZVIM_BENCH_BURSTS:-6}"
+selected_backend="${1:-all}"
+
+if (($# > 1)) || [[ ! "$selected_backend" =~ ^(all|niri|zellij|nvim)$ ]]; then
+  echo "usage: scripts/bench-live [all|niri|zellij|nvim]" >&2
+  exit 2
+fi
+
+# shellcheck source=scripts/test-output
+source "$project_dir/scripts/test-output"
+
+for command in awk cargo getconf ghostty jq niri nvim seq sort systemctl timeout zellij; do
+  command -v "$command" >/dev/null || {
+    echo "$command is required" >&2
+    exit 1
+  }
+done
+[[ "$samples" =~ ^[1-9][0-9]*$ && "$burst_samples" =~ ^[1-9][0-9]*$ ]] || {
+  echo "benchmark sample counts must be positive integers" >&2
+  exit 1
+}
+systemctl --user is-active --quiet niri-zvim.service || {
+  echo "niri-zvim.service is not active" >&2
+  exit 1
+}
+
+original_window="$(niri msg --json focused-window | jq -r '.id // empty')"
+original_windows="$(niri msg --json windows)"
+original_workspaces="$(niri msg --json workspaces)"
+test_cpu_count="$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo unknown)"
+
+# shellcheck source=scripts/live-tests/common.sh
+source "$live_tests_dir/common.sh"
+# shellcheck source=scripts/live-tests/preservation.sh
+source "$live_tests_dir/preservation.sh"
+test_start_cpu_strain="$(cpu_strain_snapshot)"
+
+restore_focus() {
+  niri msg action focus-window --id "$original_window" >/dev/null 2>&1 || true
+  rm -f "$case_state_file" "$case_debug_file"
+}
+finish() {
+  local status="$?"
+  restore_focus
+  if ((status != 0)); then
+    printf '\nCPU strain at failure: start=%s end=' "$test_start_cpu_strain" >&2
+    cpu_strain_snapshot >&2
+    printf '\n' >&2
+  fi
+  return "$status"
+}
+trap finish EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+report_series() {
+  local label="$1"
+  shift
+  local -a sorted
+  mapfile -t sorted < <(printf '%s\n' "$@" | sort -n)
+  local count="${#sorted[@]}"
+  local p50="${sorted[$(((count - 1) * 50 / 100))]}"
+  local p95="${sorted[$(((count - 1) * 95 / 100))]}"
+  local p99="${sorted[$(((count - 1) * 99 / 100))]}"
+  local max="${sorted[$((count - 1))]}"
+  local mean
+  mean="$(printf '%s\n' "$@" | awk '{ total += $1 } END { printf "%.0f", total / NR }')"
+  printf '  %-30s mean=%7.3fms p50=%7.3fms p95=%7.3fms p99=%7.3fms max=%7.3fms\n' \
+    "$label" \
+    "$(awk -v n="$mean" 'BEGIN { print n / 1000000 }')" \
+    "$(awk -v n="$p50" 'BEGIN { print n / 1000000 }')" \
+    "$(awk -v n="$p95" 'BEGIN { print n / 1000000 }')" \
+    "$(awk -v n="$p99" 'BEGIN { print n / 1000000 }')" \
+    "$(awk -v n="$max" 'BEGIN { print n / 1000000 }')"
+}
+
+measure() {
+  local backend="$1" mode="$2" direction="$3" expected="$4" count="${5:-1}"
+  NIRI_ZVIM_CLIENT="$client_bin" "$sample_bin" \
+    "$backend" "$mode" "$direction" "$expected" "$count"
+}
+
+report_comparison() {
+  local backend="$1"
+  local -n native_dispatch_ref="$2" native_total_ref="$3"
+  local -n daemon_dispatch_ref="$4" daemon_total_ref="$5"
+  local -n native_burst_ref="$6" daemon_burst_ref="$7"
+  printf '\n%s\n' "$backend"
+  report_series "native trigger completion" "${native_dispatch_ref[@]}"
+  report_series "native observed focus" "${native_total_ref[@]}"
+  report_series "daemon trigger completion" "${daemon_dispatch_ref[@]}"
+  report_series "daemon observed focus" "${daemon_total_ref[@]}"
+  report_series "native 2-step convergence" "${native_burst_ref[@]}"
+  report_series "daemon 2-step convergence" "${daemon_burst_ref[@]}"
+}
+
+bench_niri() (
+  local -a test_windows nvim_sockets zellij_sessions terminal_pid_files test_workspaces
+  local -a nd nt dd dt nb db
+  begin_case
+  local prefix="niri-zvim-live-$tag-bench-niri"
+  local workspace="$prefix-workspace"
+  local left_pid="$runtime_dir/$prefix-left.pid"
+  local middle_pid="$runtime_dir/$prefix-middle.pid"
+  local right_pid="$runtime_dir/$prefix-right.pid"
+  terminal_pid_files+=("$left_pid" "$middle_pid" "$right_pid")
+
+  focus_fresh_workspace
+  local left middle right dispatch total _
+  launch_terminal "$prefix-left" "$left_pid"; left="$launched_window"; test_windows+=("$left")
+  name_focused_workspace "$workspace"; test_workspaces+=("$workspace")
+  move_window_column_last "$left"
+  launch_terminal "$prefix-middle" "$middle_pid"; middle="$launched_window"; test_windows+=("$middle")
+  move_window_column_last "$middle"
+  launch_terminal "$prefix-right" "$right_pid"; right="$launched_window"; test_windows+=("$right")
+  move_window_column_last "$right"
+
+  for _ in $(seq 1 "$samples"); do
+    focus_niri_window "$left"
+    read -r dispatch total < <(measure niri native right "$middle")
+    nd+=("$dispatch"); nt+=("$total")
+    read -r dispatch total < <(measure niri native left "$left")
+    nd+=("$dispatch"); nt+=("$total")
+  done
+  for _ in $(seq 1 "$samples"); do
+    focus_niri_window "$left"
+    read -r dispatch total < <(measure niri daemon right "$middle")
+    dd+=("$dispatch"); dt+=("$total")
+    read -r dispatch total < <(measure niri daemon left "$left")
+    dd+=("$dispatch"); dt+=("$total")
+  done
+  for _ in $(seq 1 "$burst_samples"); do
+    focus_niri_window "$left"
+    read -r _ total < <(measure niri native right "$right" 2); nb+=("$total")
+    focus_niri_window "$left"
+    read -r _ total < <(measure niri daemon right "$right" 2); db+=("$total")
+  done
+  report_comparison "Niri columns" nd nt dd dt nb db
+)
+
+bench_zellij() (
+  local -a test_windows nvim_sockets zellij_sessions terminal_pid_files test_workspaces
+  local -a nd nt dd dt nb db
+  begin_case
+  local prefix="niri-zvim-live-$tag-bench-zellij"
+  local workspace="$prefix-workspace"
+  local native_session="$prefix-native-session"
+  local daemon_session="$prefix-daemon-session"
+  local layout='layout {
+    pane split_direction="vertical" {
+        pane focus=true
+        pane
+        pane
+    }
+}'
+  zellij_sessions+=("$native_session" "$daemon_session")
+
+  focus_fresh_workspace
+  local native_window daemon_window dispatch total _
+  # Keep native and daemon samples in equivalent but separate sessions so
+  # out-of-band native focus changes cannot contaminate optimistic state.
+  launch_zellij "$native_session" 3 "$layout"
+  native_window="$launched_window"; test_windows+=("$native_window")
+  name_focused_workspace "$workspace"; test_workspaces+=("$workspace")
+  mapfile -t native_panes < <(zellij_pane_ids "$native_session")
+
+  launch_zellij "$daemon_session" 3 "$layout"
+  daemon_window="$launched_window"; test_windows+=("$daemon_window")
+  mapfile -t daemon_panes < <(zellij_pane_ids "$daemon_session")
+
+  focus_niri_window "$native_window"
+  export NIRI_ZVIM_BENCH_SESSION="$native_session"
+  for _ in $(seq 1 "$samples"); do
+    read -r dispatch total < <(measure zellij native right "${native_panes[1]}")
+    nd+=("$dispatch"); nt+=("$total")
+    read -r dispatch total < <(measure zellij native left "${native_panes[0]}")
+    nd+=("$dispatch"); nt+=("$total")
+  done
+  for _ in $(seq 1 "$burst_samples"); do
+    read -r _ total < <(measure zellij native right "${native_panes[2]}" 2); nb+=("$total")
+    measure zellij native left "${native_panes[0]}" 2 >/dev/null
+  done
+
+  focus_niri_window "$daemon_window"
+  export NIRI_ZVIM_BENCH_SESSION="$daemon_session"
+  for _ in $(seq 1 "$samples"); do
+    read -r dispatch total < <(measure zellij daemon right "${daemon_panes[1]}")
+    dd+=("$dispatch"); dt+=("$total")
+    read -r dispatch total < <(measure zellij daemon left "${daemon_panes[0]}")
+    dd+=("$dispatch"); dt+=("$total")
+  done
+  for _ in $(seq 1 "$burst_samples"); do
+    read -r _ total < <(measure zellij daemon right "${daemon_panes[2]}" 2); db+=("$total")
+    measure zellij daemon left "${daemon_panes[0]}" 2 >/dev/null
+  done
+  report_comparison "Zellij panes" nd nt dd dt nb db
+)
+
+bench_nvim() (
+  local -a test_windows nvim_sockets zellij_sessions terminal_pid_files test_workspaces
+  local -a nd nt dd dt nb db
+  begin_case
+  local prefix="niri-zvim-live-$tag-bench-nvim"
+  local workspace="$prefix-workspace"
+  local socket="$runtime_dir/$prefix.sock"
+  nvim_sockets+=("$socket")
+
+  focus_fresh_workspace
+  local window dispatch total _
+  launch_nvim "$prefix" "$socket" 3; window="$launched_window"; test_windows+=("$window")
+  name_focused_workspace "$workspace"; test_workspaces+=("$workspace")
+  mapfile -t windows < <(nvim_window_ids "$socket")
+  focus_nvim_window "$socket" "${windows[0]}"
+  export NIRI_ZVIM_BENCH_NVIM="$socket"
+
+  for _ in $(seq 1 "$samples"); do
+    focus_nvim_window "$socket" "${windows[0]}"
+    read -r dispatch total < <(measure nvim native right "${windows[1]}")
+    nd+=("$dispatch"); nt+=("$total")
+    read -r dispatch total < <(measure nvim native left "${windows[0]}")
+    nd+=("$dispatch"); nt+=("$total")
+  done
+  for _ in $(seq 1 "$samples"); do
+    focus_nvim_window "$socket" "${windows[0]}"
+    read -r dispatch total < <(measure nvim daemon right "${windows[1]}")
+    dd+=("$dispatch"); dt+=("$total")
+    read -r dispatch total < <(measure nvim daemon left "${windows[0]}")
+    dd+=("$dispatch"); dt+=("$total")
+  done
+  for _ in $(seq 1 "$burst_samples"); do
+    focus_nvim_window "$socket" "${windows[0]}"
+    read -r _ total < <(measure nvim native right "${windows[2]}" 2); nb+=("$total")
+    focus_nvim_window "$socket" "${windows[0]}"
+    read -r _ total < <(measure nvim daemon right "${windows[2]}" 2); db+=("$total")
+  done
+  report_comparison "Neovim windows" nd nt dd dt nb db
+)
+
+cat <<'EOF'
+This benchmark opens disposable Ghostty windows and controls desktop focus.
+Do not use the keyboard or mouse until the final CPU-strain summary appears.
+Timings include trigger-process cost and authoritative polling overhead.
+They are descriptive distributions, not correctness thresholds.
+EOF
+printf 'Starting in 2 seconds with %s single samples and %s burst samples...\n' \
+  "$samples" "$burst_samples"
+sleep 2
+
+cargo build --quiet --release -p niri-zvim \
+  --bin niri-zvim --bin live-bench-sample
+if [[ "$selected_backend" == all || "$selected_backend" == niri ]]; then
+  bench_niri
+fi
+if [[ "$selected_backend" == all || "$selected_backend" == zellij ]]; then
+  bench_zellij
+fi
+if [[ "$selected_backend" == all || "$selected_backend" == nvim ]]; then
+  bench_nvim
+fi
+test_original_desktop_preserved
+
+printf '\nCPU strain: start=%s end=' "$test_start_cpu_strain"
+cpu_strain_snapshot
+printf '\n'
