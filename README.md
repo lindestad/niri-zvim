@@ -102,6 +102,9 @@ finishes. It terminates only test processes, removes only unique test workspace
 names, verifies that the original windows and workspaces are unchanged, and
 restores the previously focused Niri window. Run it with a normal Niri window
 focused, not from overview or while a layer-shell surface owns keyboard focus.
+Each live case fails after 10 seconds and prints its last checkpoint plus the
+current Niri, Zellij, Neovim, and process state before cleanup. Set
+`NIRI_ZVIM_LIVE_TIMEOUT` to a different number of seconds when debugging.
 
 The benchmark suite measures both in-memory optimistic routing and the Unix
 socket connect/write operation used by a keypress.

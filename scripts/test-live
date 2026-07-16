@@ -10,13 +10,19 @@ daemon_config="${NIRI_ZVIM_CONFIG:-$config_home/niri-zvim/config.json}"
 ghostty_config="$project_dir/tests/ghostty.config"
 terminal_fixture="$project_dir/tests/fixtures/terminal"
 tag="$$"
+case_timeout_seconds="${NIRI_ZVIM_LIVE_TIMEOUT:-10}"
+case_state_file="$runtime_dir/niri-zvim-live-$tag.state"
 
-for command in ghostty jq niri niri-zvim nvim systemctl zellij; do
+for command in ghostty jq niri niri-zvim nvim systemctl timeout zellij; do
   command -v "$command" >/dev/null || {
     echo "$command is required" >&2
     exit 1
   }
 done
+if [[ ! "$case_timeout_seconds" =~ ^[1-9][0-9]*$ ]]; then
+  echo "NIRI_ZVIM_LIVE_TIMEOUT must be a positive integer" >&2
+  exit 1
+fi
 systemctl --user is-active --quiet niri-zvim.service || {
   echo "niri-zvim.service is not active" >&2
   exit 1
@@ -43,6 +49,7 @@ original_workspaces="$(niri msg --json workspaces)"
 
 restore_focus() {
   niri msg action focus-window --id "$original_window" >/dev/null 2>&1 || true
+  rm -f "$case_state_file"
 }
 trap restore_focus EXIT
 trap 'exit 130' INT
@@ -53,6 +60,53 @@ launch_ghostty() {
     --config-default-files=false \
     --config-file="$ghostty_config" \
     -e "$@"
+}
+
+mark_state() {
+  printf '%s\n' "$1" >"$case_state_file"
+}
+
+dump_live_state() {
+  local reason="$1"
+  local session socket
+  printf '  debug: %s\n' "$reason" >&2
+  if [[ -r "$case_state_file" ]]; then
+    printf '  last checkpoint: %s\n' "$(<"$case_state_file")" >&2
+  fi
+  printf '  Niri focus: ' >&2
+  timeout 1s niri msg --json focused-window 2>/dev/null |
+    jq -c '{id,title,workspace_id}' >&2 || echo unavailable >&2
+  echo "  relevant Niri workspaces:" >&2
+  timeout 1s niri msg --json workspaces 2>/dev/null |
+    jq -c --arg tag "niri-zvim-live-$tag" \
+      '.[] | select(.is_focused or ((.name // "") | contains($tag)))
+        | {id,idx,name,output,is_focused,active_window_id}' >&2 || true
+  echo "  relevant Niri windows:" >&2
+  timeout 1s niri msg --json windows 2>/dev/null |
+    jq -c --arg tag "niri-zvim-live-$tag" \
+      '.[] | select(.is_focused or (.title | contains($tag)))
+        | {id,title,workspace_id,is_focused}' >&2 || true
+  while IFS= read -r session; do
+    [[ -n "$session" ]] || continue
+    printf '  Zellij %s: ' "$session" >&2
+    timeout 1s zellij --session "$session" action list-panes --all --json \
+      2>/dev/null | jq -c '[.[] | select(.is_plugin | not)
+        | {id,is_focused,pane_x,pane_columns}]' >&2 || echo unavailable >&2
+  done < <(timeout 1s zellij list-sessions --short --no-formatting 2>/dev/null |
+    grep "niri-zvim-live-$tag" || true)
+  shopt -s nullglob
+  for socket in "$runtime_dir"/niri-zvim-live-"$tag"*.sock; do
+    [[ -S "$socket" ]] || continue
+    printf '  Neovim %s: ' "$(basename "$socket")" >&2
+    timeout 1s nvim --headless --server "$socket" --remote-expr \
+      'json_encode(#{focused: win_getid(), windows: map(getwininfo(), {_, v -> v.winid})})' \
+      2>/dev/null >&2 || echo unavailable >&2
+  done
+  shopt -u nullglob
+  echo "  relevant processes:" >&2
+  # shellcheck disable=SC2009
+  ps -eo pid,ppid,etimes,stat,args |
+    grep "[n]iri-zvim-live-$tag" >&2 || true
 }
 
 wait_for_socket() {
@@ -234,6 +288,7 @@ focused_workspace() {
 }
 
 focus_fresh_workspace() {
+  mark_state "finding a fresh workspace"
   focus_niri_window "$original_window"
   local output idx
   output="$(focused_workspace | jq -r '.output')"
@@ -282,9 +337,11 @@ move_window_column_last() {
 launch_terminal() {
   local title="$1"
   local pid_file="$2"
+  mark_state "launching empty terminal $title"
   launch_ghostty "$terminal_fixture" "$title" "$pid_file"
   wait_for_file "$pid_file"
-  wait_for_window "$title" exact
+  launched_window="$(wait_for_window "$title" exact)"
+  mark_state "empty terminal $title is ready as Niri window $launched_window"
 }
 
 launch_nvim() {
@@ -296,22 +353,24 @@ launch_nvim() {
   for ((_ = 1; _ < count; _++)); do
     layout+=' | vsplit'
   done
+  mark_state "launching $count-window Neovim $title"
   launch_ghostty nvim --listen "$socket" \
     -c "set title titlestring=$title | $layout"
   wait_for_socket "$socket"
   wait_for_nvim_count "$socket" "$count"
-  wait_for_window "$title" exact
+  launched_window="$(wait_for_window "$title" exact)"
+  mark_state "Neovim $title is ready as Niri window $launched_window"
 }
 
 launch_zellij() {
   local session="$1"
+  mark_state "launching Zellij session $session"
   launch_ghostty zellij --session "$session"
   wait_for_zellij_session "$session"
-  local window
-  window="$(wait_for_window "$session" contains)"
+  launched_window="$(wait_for_window "$session" contains)"
   wait_for_zellij_count "$session" 1
   sleep 0.6
-  printf '%s\n' "$window"
+  mark_state "Zellij $session is ready as Niri window $launched_window"
 }
 
 expect_state() {
@@ -352,12 +411,18 @@ navigate_expect() {
   local label="$1"
   local direction="$2"
   shift 2
+  mark_state "navigating $direction: $label"
   niri-zvim "$direction"
   expect_state "$label" "$@"
+  mark_state "completed: $label"
 }
 
 cleanup_case() {
+  local status=$?
   local socket session pid_file pid workspace
+  if ((status != 0)); then
+    dump_live_state "case exited with status $status before cleanup"
+  fi
   for socket in "${nvim_sockets[@]}"; do
     if [[ -S "$socket" ]]; then
       nvim_remote_expr "$socket" 'execute("qa!")' >/dev/null 2>&1 || true
@@ -390,6 +455,7 @@ begin_case() {
   zellij_sessions=()
   terminal_pid_files=()
   test_workspaces=()
+  launched_window=""
   trap cleanup_case EXIT
   trap 'exit 130' INT
   trap 'exit 143' TERM
@@ -411,22 +477,27 @@ test_direct_terminal_matrix() (
 
   focus_fresh_workspace
   local empty_left nvim_two empty_middle nvim_three empty_right
-  empty_left="$(launch_terminal "$prefix-empty-left" "$empty_left_pid")"
+  launch_terminal "$prefix-empty-left" "$empty_left_pid"
+  empty_left="$launched_window"
   test_windows+=("$empty_left")
   name_focused_workspace "$workspace"
   test_workspaces+=("$workspace")
   move_window_column_last "$empty_left"
 
-  nvim_two="$(launch_nvim "$prefix-nvim-two" "$nvim_two_socket" 2)"
+  launch_nvim "$prefix-nvim-two" "$nvim_two_socket" 2
+  nvim_two="$launched_window"
   test_windows+=("$nvim_two")
   move_window_column_last "$nvim_two"
-  empty_middle="$(launch_terminal "$prefix-empty-middle" "$empty_middle_pid")"
+  launch_terminal "$prefix-empty-middle" "$empty_middle_pid"
+  empty_middle="$launched_window"
   test_windows+=("$empty_middle")
   move_window_column_last "$empty_middle"
-  nvim_three="$(launch_nvim "$prefix-nvim-three" "$nvim_three_socket" 3)"
+  launch_nvim "$prefix-nvim-three" "$nvim_three_socket" 3
+  nvim_three="$launched_window"
   test_windows+=("$nvim_three")
   move_window_column_last "$nvim_three"
-  empty_right="$(launch_terminal "$prefix-empty-right" "$empty_right_pid")"
+  launch_terminal "$prefix-empty-right" "$empty_right_pid"
+  empty_right="$launched_window"
   test_windows+=("$empty_right")
   move_window_column_last "$empty_right"
 
@@ -482,15 +553,18 @@ test_zellij_single_pane() (
 
   focus_fresh_workspace
   local left zellij_window right pane
-  left="$(launch_terminal "$prefix-left" "$left_pid")"
+  launch_terminal "$prefix-left" "$left_pid"
+  left="$launched_window"
   test_windows+=("$left")
   name_focused_workspace "$workspace"
   test_workspaces+=("$workspace")
   move_window_column_last "$left"
-  zellij_window="$(launch_zellij "$session")"
+  launch_zellij "$session"
+  zellij_window="$launched_window"
   test_windows+=("$zellij_window")
   move_window_column_last "$zellij_window"
-  right="$(launch_terminal "$prefix-right" "$right_pid")"
+  launch_terminal "$prefix-right" "$right_pid"
+  right="$launched_window"
   test_windows+=("$right")
   move_window_column_last "$right"
   pane="$(zellij_pane_ids "$session")"
@@ -519,19 +593,22 @@ test_zellij_three_panes() (
 
   focus_fresh_workspace
   local left zellij_window right
-  left="$(launch_terminal "$prefix-left" "$left_pid")"
+  launch_terminal "$prefix-left" "$left_pid"
+  left="$launched_window"
   test_windows+=("$left")
   name_focused_workspace "$workspace"
   test_workspaces+=("$workspace")
   move_window_column_last "$left"
-  zellij_window="$(launch_zellij "$session")"
+  launch_zellij "$session"
+  zellij_window="$launched_window"
   test_windows+=("$zellij_window")
   move_window_column_last "$zellij_window"
   zellij --session "$session" action new-pane --direction right >/dev/null
   wait_for_zellij_count "$session" 2
   zellij --session "$session" action new-pane --direction right >/dev/null
   wait_for_zellij_count "$session" 3
-  right="$(launch_terminal "$prefix-right" "$right_pid")"
+  launch_terminal "$prefix-right" "$right_pid"
+  right="$launched_window"
   test_windows+=("$right")
   move_window_column_last "$right"
 
@@ -571,12 +648,14 @@ test_nested_nvim_in_zellij() (
 
   focus_fresh_workspace
   local left zellij_window right
-  left="$(launch_terminal "$prefix-left" "$left_pid")"
+  launch_terminal "$prefix-left" "$left_pid"
+  left="$launched_window"
   test_windows+=("$left")
   name_focused_workspace "$workspace"
   test_workspaces+=("$workspace")
   move_window_column_last "$left"
-  zellij_window="$(launch_zellij "$session")"
+  launch_zellij "$session"
+  zellij_window="$launched_window"
   test_windows+=("$zellij_window")
   move_window_column_last "$zellij_window"
   zellij --session "$session" action new-pane --direction right --close-on-exit -- \
@@ -586,7 +665,8 @@ test_nested_nvim_in_zellij() (
   wait_for_zellij_count "$session" 2
   zellij --session "$session" action new-pane --direction right >/dev/null
   wait_for_zellij_count "$session" 3
-  right="$(launch_terminal "$prefix-right" "$right_pid")"
+  launch_terminal "$prefix-right" "$right_pid"
+  right="$launched_window"
   test_windows+=("$right")
   move_window_column_last "$right"
 
@@ -636,17 +716,20 @@ test_workspace_navigation() (
 
   focus_fresh_workspace
   local top middle bottom
-  top="$(launch_terminal "$top_name" "$top_pid")"
+  launch_terminal "$top_name" "$top_pid"
+  top="$launched_window"
   test_windows+=("$top")
   name_focused_workspace "$top_name"
 
   focus_fresh_workspace
-  middle="$(launch_terminal "$middle_name" "$middle_pid")"
+  launch_terminal "$middle_name" "$middle_pid"
+  middle="$launched_window"
   test_windows+=("$middle")
   name_focused_workspace "$middle_name"
 
   focus_fresh_workspace
-  bottom="$(launch_terminal "$bottom_name" "$bottom_pid")"
+  launch_terminal "$bottom_name" "$bottom_pid"
+  bottom="$launched_window"
   test_windows+=("$bottom")
   name_focused_workspace "$bottom_name"
 
@@ -695,15 +778,26 @@ run_case() {
   local function="$2"
   local status
   printf '\n-- %s --\n' "$name"
-  "$function"
+  mark_state "starting case: $name"
+  timeout --signal=TERM --kill-after=8s "${case_timeout_seconds}s" \
+    bash -c "$function"
   status=$?
   if ((status == 0)); then
     printf 'PASS: %s\n' "$name"
+  elif ((status == 124)); then
+    failures+=("$name (timed out after ${case_timeout_seconds}s)")
+    printf 'TIMEOUT: %s exceeded %ss\n' "$name" "$case_timeout_seconds" >&2
   else
     failures+=("$name")
     printf 'FAIL: %s\n' "$name" >&2
   fi
 }
+
+while read -r _ _ function; do
+  export -f "${function?}"
+done < <(declare -F)
+export project_dir runtime_dir ghostty_config terminal_fixture tag case_state_file
+export original_window original_windows original_workspaces
 
 cat <<'EOF'
 This test opens and focuses disposable Ghostty windows and creates temporary
@@ -711,6 +805,9 @@ named Niri workspaces. Do not use the mouse or keyboard until the final
 PASS/FAIL summary appears; changing focus can produce incorrect results.
 Only test processes and test workspace names are removed during cleanup.
 EOF
+printf 'Each case has a %s-second deadline and prints a state snapshot before cleanup\n' \
+  "$case_timeout_seconds"
+echo "if it fails or times out."
 
 run_case "empty terminals and direct Neovim matrix" test_direct_terminal_matrix
 run_case "single-pane Zellij boundaries" test_zellij_single_pane
