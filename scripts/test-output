@@ -1,0 +1,54 @@
+# Shared color-aware test output. This file is sourced by test scripts.
+# shellcheck shell=bash
+
+if [[ -z "${NO_COLOR:-}" &&
+  ("${CLICOLOR_FORCE:-0}" != 0 || -t 1 || -t 2) ]]; then
+  TEST_RED=$'\033[31m'
+  TEST_GREEN=$'\033[32m'
+  TEST_YELLOW=$'\033[1;33m'
+  TEST_RESET=$'\033[0m'
+else
+  TEST_RED=
+  TEST_GREEN=
+  TEST_YELLOW=
+  TEST_RESET=
+fi
+
+test_input_warning() {
+  printf '\n%b%s\n%s\n%s\n%s\n%s\n%s%b\n\n' \
+    "$TEST_YELLOW" \
+    '╔══════════════════════════════════════════════════════════════════════╗' \
+    '║             DO NOT TOUCH THE KEYBOARD OR MOUSE                       ║' \
+    '║ Live desktop tests are about to take control of windows and focus.   ║' \
+    '║ Any input may change state and make the result incorrect.            ║' \
+    '║ Wait for the final PASS/FAIL summary. Starting in 2 seconds...       ║' \
+    '╚══════════════════════════════════════════════════════════════════════╝' \
+    "$TEST_RESET"
+}
+
+test_pass() {
+  local message="$1"
+  local prefix="${2:-}"
+  printf '%s%bPASS%b: %s\n' \
+    "$prefix" "$TEST_GREEN" "$TEST_RESET" "$message"
+}
+
+test_fail() {
+  local message="$1"
+  local prefix="${2:-}"
+  printf '%s%bFAIL%b: %s\n' \
+    "$prefix" "$TEST_RED" "$TEST_RESET" "$message" >&2
+}
+
+test_timeout() {
+  local message="$1"
+  printf '%bTIMEOUT%b: %s\n' "$TEST_RED" "$TEST_RESET" "$message" >&2
+}
+
+test_success() {
+  printf '%b%s%b\n' "$TEST_GREEN" "$1" "$TEST_RESET"
+}
+
+test_failure_heading() {
+  printf '%b%s%b\n' "$TEST_RED" "$1" "$TEST_RESET" >&2
+}

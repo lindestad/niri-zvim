@@ -3,6 +3,8 @@ set -uo pipefail
 
 project_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ghostty_config="$project_dir/tests/ghostty.config"
+# shellcheck source=scripts/test-output
+source "$project_dir/scripts/test-output"
 
 missing=()
 for command in cargo ghostty jq niri niri-zvim nvim rustup systemctl zellij; do
@@ -56,10 +58,10 @@ run_suite() {
   shift
   printf '\n==> %s\n' "$name"
   if "$@"; then
-    printf 'PASS: %s\n' "$name"
+    test_pass "$name"
   else
     failures+=("$name")
-    printf 'FAIL: %s\n' "$name" >&2
+    test_fail "$name"
   fi
 }
 
@@ -70,8 +72,8 @@ run_suite "Live desktop navigation tests" "$project_dir/scripts/test-live"
 
 printf '\n'
 if ((${#failures[@]})); then
-  echo "Test run failed:"
+  test_failure_heading "Test run failed:"
   printf '  - %s\n' "${failures[@]}"
   exit 1
 fi
-echo "All test suites passed."
+test_success "All test suites passed."

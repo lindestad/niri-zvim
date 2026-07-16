@@ -20,5 +20,5 @@ test_original_desktop_preserved() {
     echo "an original named or occupied workspace was deleted or changed" >&2
     return 1
   fi
-  echo "  PASS: all original windows and user workspaces are unchanged"
+  test_pass "all original windows and user workspaces are unchanged" "  "
 }

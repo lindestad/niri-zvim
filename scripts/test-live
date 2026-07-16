@@ -15,6 +15,8 @@ case_timeout_seconds="${NIRI_ZVIM_LIVE_TIMEOUT:-20}"
 selected_case="${1:-all}"
 case_state_file="$runtime_dir/niri-zvim-live-$tag.state"
 case_debug_file="$runtime_dir/niri-zvim-live-$tag.debug"
+# shellcheck source=scripts/test-output
+source "$project_dir/scripts/test-output"
 
 if (($# > 1)); then
   echo "usage: scripts/test-live [all|direct|zellij-one|zellij-three|nested|workspaces]" >&2
@@ -94,6 +96,7 @@ export project_dir runtime_dir ghostty_config terminal_fixture nvim_fixture tag
 export operation_timeout_seconds case_state_file case_debug_file
 export original_window original_windows original_workspaces
 export test_cpu_count test_start_cpu_strain
+export TEST_RED TEST_GREEN TEST_YELLOW TEST_RESET
 
 cat <<'EOF'
 This test opens and focuses disposable Ghostty windows and creates temporary
@@ -124,8 +127,8 @@ run_case "original desktop preservation" test_original_desktop_preserved
 
 printf '\n'
 if ((${#failures[@]})); then
-  echo "Live tests failed:"
+  test_failure_heading "Live tests failed:"
   printf '  - %s\n' "${failures[@]}"
   exit 1
 fi
-echo "All live navigation tests passed."
+test_success "All live navigation tests passed."

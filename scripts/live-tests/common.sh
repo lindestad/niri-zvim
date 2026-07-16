@@ -369,12 +369,12 @@ expect_state() {
     if [[ "$actual_niri" == "$expected_niri" &&
       "$actual_pane" == "$expected_pane" &&
       "$actual_nvim" == "$expected_nvim" ]]; then
-      printf '  PASS: %s\n' "$label"
+      test_pass "$label" "  "
       return 0
     fi
     sleep 0.02
   done
-  printf '  FAIL: %s\n' "$label" >&2
+  test_fail "$label" "  "
   printf '    expected niri=%s pane=%s nvim=%s\n' \
     "$expected_niri" "$expected_pane" "$expected_nvim" >&2
   printf '    actual   niri=%s pane=%s nvim=%s\n' \
@@ -400,10 +400,10 @@ assert_state_now() {
   if [[ "$actual_niri" == "$expected_niri" &&
     "$actual_pane" == "$expected_pane" &&
     "$actual_nvim" == "$expected_nvim" ]]; then
-    printf '  PASS: %s\n' "$label"
+    test_pass "$label" "  "
     return 0
   fi
-  printf '  FAIL: %s\n' "$label" >&2
+  test_fail "$label" "  "
   printf '    expected niri=%s pane=%s nvim=%s\n' \
     "$expected_niri" "$expected_pane" "$expected_nvim" >&2
   printf '    actual   niri=%s pane=%s nvim=%s\n' \
@@ -418,11 +418,10 @@ assert_nvim_now() {
   local actual
   actual="$(nvim_remote_expr "$socket" 'win_getid()')"
   if [[ "$actual" == "$expected" ]]; then
-    printf '  PASS: %s\n' "$label"
+    test_pass "$label" "  "
     return 0
   fi
-  printf '  FAIL: %s (expected nvim=%s, actual nvim=%s)\n' \
-    "$label" "$expected" "$actual" >&2
+  test_fail "$label (expected nvim=$expected, actual nvim=$actual)" "  "
   return 1
 }
 
@@ -551,10 +550,10 @@ run_case() {
     bash -c "$function"
   status=$?
   if ((status == 0)); then
-    printf 'PASS: %s\n' "$name"
+    test_pass "$name"
   elif ((status == 124)); then
     failures+=("$name (timed out after ${case_timeout_seconds}s)")
-    printf 'TIMEOUT: %s exceeded %ss\n' "$name" "$case_timeout_seconds" >&2
+    test_timeout "$name exceeded ${case_timeout_seconds}s"
     if [[ ! -s "$case_debug_file" ]]; then
       dump_live_state "case timed out; child diagnostics were unavailable" \
         >"$case_debug_file" 2>&1
@@ -565,7 +564,7 @@ run_case() {
     fi
   else
     failures+=("$name")
-    printf 'FAIL: %s\n' "$name" >&2
+    test_fail "$name"
     if [[ -s "$case_debug_file" ]]; then
       sed 's/^/  /' "$case_debug_file" >&2
     fi
