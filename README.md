@@ -94,12 +94,14 @@ For individual development checks, run:
     cargo clippy --workspace --all-targets --exclude niri-zvim-zellij -- -D warnings
     cargo clippy -p niri-zvim-zellij --target wasm32-wasip1 -- -D warnings
 
-The live part launches disposable Ghostty windows with an isolated test config
-and verifies direct Neovim and Zellij transitions through their RPC and JSON
-state APIs. Do not interact with the desktop until it finishes. It closes only
-the test windows/sessions and restores the previously focused Niri window. Run
-it with a normal Niri window focused, not from overview or while a layer-shell
-surface owns keyboard focus.
+The live part launches disposable Ghostty windows with an isolated test config.
+It traverses empty terminals, direct Neovim instances, one- and three-pane
+Zellij sessions, nested Neovim windows inside Zellij panes, and three temporary
+workspaces in both directions. Do not interact with the desktop until it
+finishes. It terminates only test processes, removes only unique test workspace
+names, verifies that the original windows and workspaces are unchanged, and
+restores the previously focused Niri window. Run it with a normal Niri window
+focused, not from overview or while a layer-shell surface owns keyboard focus.
 
 The benchmark suite measures both in-memory optimistic routing and the Unix
 socket connect/write operation used by a keypress.

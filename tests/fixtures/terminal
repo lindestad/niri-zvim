@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+title="$1"
+pid_file="$2"
+
+printf '%s\n' "$$" >"$pid_file"
+printf '\033]2;%s\007' "$title"
+exec sleep infinity

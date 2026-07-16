@@ -1,11 +1,15 @@
 #!/usr/bin/env bash
+# The per-case subshells intentionally keep cleanup arrays in dynamic scope.
+# shellcheck disable=SC2030,SC2031
 set -uo pipefail
 
 project_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 runtime_dir="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+config_home="${XDG_CONFIG_HOME:-$HOME/.config}"
+daemon_config="${NIRI_ZVIM_CONFIG:-$config_home/niri-zvim/config.json}"
 ghostty_config="$project_dir/tests/ghostty.config"
+terminal_fixture="$project_dir/tests/fixtures/terminal"
 tag="$$"
-original_window="$(niri msg --json focused-window | jq -r '.id // empty')"
 
 for command in ghostty jq niri niri-zvim nvim systemctl zellij; do
   command -v "$command" >/dev/null || {
@@ -17,10 +21,25 @@ systemctl --user is-active --quiet niri-zvim.service || {
   echo "niri-zvim.service is not active" >&2
   exit 1
 }
+if [[ ! -r "$daemon_config" ]]; then
+  echo "the workspace live test requires a readable daemon config at $daemon_config" >&2
+  exit 1
+fi
+active_up="$(jq -r '.modes[.active_mode].up // empty' "$daemon_config")"
+active_down="$(jq -r '.modes[.active_mode].down // empty' "$daemon_config")"
+if [[ "$active_up" != focus-window-or-workspace-up ||
+  "$active_down" != focus-window-or-workspace-down ]]; then
+  echo "the active daemon mode must use workspace-aware up/down navigation" >&2
+  exit 1
+fi
+
+original_window="$(niri msg --json focused-window | jq -r '.id // empty')"
 if [[ -z "$original_window" ]]; then
   echo "focus a normal Niri window before running this test (not a layer-shell surface)" >&2
   exit 1
 fi
+original_windows="$(niri msg --json windows)"
+original_workspaces="$(niri msg --json workspaces)"
 
 restore_focus() {
   niri msg action focus-window --id "$original_window" >/dev/null 2>&1 || true
@@ -38,7 +57,7 @@ launch_ghostty() {
 
 wait_for_socket() {
   local socket="$1"
-  for _ in {1..100}; do
+  for _ in {1..150}; do
     [[ -S "$socket" ]] && return 0
     sleep 0.05
   done
@@ -46,11 +65,21 @@ wait_for_socket() {
   return 1
 }
 
+wait_for_file() {
+  local file="$1"
+  for _ in {1..150}; do
+    [[ -s "$file" ]] && return 0
+    sleep 0.05
+  done
+  echo "timed out waiting for file $file" >&2
+  return 1
+}
+
 wait_for_window() {
   local title="$1"
   local mode="$2"
   local window
-  for _ in {1..100}; do
+  for _ in {1..150}; do
     if [[ "$mode" == exact ]]; then
       window="$(niri msg --json windows | jq -r --arg title "$title" \
         '.[] | select(.title == $title) | .id' | tail -1)"
@@ -68,42 +97,23 @@ wait_for_window() {
   return 1
 }
 
-wait_for_nvim_window() {
-  local socket="$1"
-  local expected="$2"
+wait_for_windows_gone() {
   local current
-  for _ in {1..100}; do
-    current="$(nvim_remote_expr "$socket" 'win_getid()')"
-    [[ "$current" == "$expected" ]] && return 0
-    sleep 0.02
-  done
-  echo "Neovim focused window did not become $expected" >&2
-  return 1
-}
-
-wait_for_niri_window() {
-  local expected="$1"
-  for _ in {1..100}; do
-    niri msg action focus-window --id "$expected" >/dev/null
-    if [[ "$(niri msg --json focused-window | jq -r '.id // empty')" == "$expected" ]]; then
-      return 0
-    fi
-    sleep 0.02
-  done
-  echo "Niri focused window did not become $expected" >&2
-  return 1
-}
-
-wait_for_window_gone() {
-  local window="$1"
-  for _ in {1..100}; do
-    if ! niri msg --json windows | jq -e --argjson id "$window" \
-      '.[] | select(.id == $id)' >/dev/null; then
-      return 0
-    fi
+  for _ in {1..150}; do
+    current="$(niri msg --json windows)"
+    local found=false
+    local window
+    for window in "$@"; do
+      if jq -e --argjson id "$window" '.[] | select(.id == $id)' \
+        <<<"$current" >/dev/null; then
+        found=true
+        break
+      fi
+    done
+    [[ "$found" == false ]] && return 0
     sleep 0.05
   done
-  echo "timed out waiting for Niri window $window to close" >&2
+  echo "timed out waiting for test windows to close: $*" >&2
   return 1
 }
 
@@ -113,15 +123,42 @@ nvim_remote_expr() {
   nvim --headless --server "$socket" --remote-expr "$expression"
 }
 
+nvim_window_ids() {
+  local socket="$1"
+  nvim_remote_expr "$socket" \
+    'json_encode(map(getwininfo(), {_, v -> [v.winid, v.wincol]}))' |
+    jq -r 'sort_by(.[1]) | .[][0]'
+}
+
+wait_for_nvim_count() {
+  local socket="$1"
+  local expected="$2"
+  local count
+  for _ in {1..150}; do
+    count="$(nvim_window_ids "$socket" | wc -l)"
+    [[ "$count" == "$expected" ]] && return 0
+    sleep 0.05
+  done
+  echo "Neovim did not expose $expected windows" >&2
+  return 1
+}
+
 focused_zellij_pane() {
   local session="$1"
-  zellij --session "$session" action list-panes --all --json |
+  zellij --session "$session" action list-panes --all --json 2>/dev/null |
     jq -r '.[] | select((.is_plugin | not) and .is_focused) | .id'
+}
+
+zellij_pane_ids() {
+  local session="$1"
+  zellij --session "$session" action list-panes --all --json 2>/dev/null |
+    jq -r '[.[] | select((.is_plugin | not) and .is_selectable and (.is_suppressed | not))]
+      | sort_by(.pane_x) | .[].id'
 }
 
 wait_for_zellij_session() {
   local session="$1"
-  for _ in {1..100}; do
+  for _ in {1..150}; do
     zellij list-sessions --short --no-formatting 2>/dev/null |
       grep -qx "$session" && return 0
     sleep 0.05
@@ -130,121 +167,537 @@ wait_for_zellij_session() {
   return 1
 }
 
-wait_for_zellij_pane() {
+wait_for_zellij_count() {
   local session="$1"
   local expected="$2"
-  for _ in {1..100}; do
-    [[ "$(focused_zellij_pane "$session")" == "$expected" ]] && return 0
-    sleep 0.02
+  local count
+  for _ in {1..150}; do
+    count="$(zellij_pane_ids "$session" | wc -l)"
+    [[ "$count" == "$expected" ]] && return 0
+    sleep 0.05
   done
-  echo "Zellij focused pane did not become $expected" >&2
+  echo "Zellij did not expose $expected panes in $session" >&2
   return 1
 }
 
-test_direct_nvim() (
-  set -euo pipefail
-  local socket="$runtime_dir/niri-zvim-live-nvim-$tag.sock"
-  local title="niri-zvim-live-nvim-$tag"
-  local window=""
+focus_zellij_pane() {
+  local session="$1"
+  local pane="$2"
+  zellij --session "$session" action focus-pane-id "$pane" >/dev/null
+  for _ in {1..150}; do
+    [[ "$(focused_zellij_pane "$session")" == "$pane" ]] && {
+      sleep 0.1
+      return 0
+    }
+    sleep 0.02
+  done
+  echo "could not focus Zellij pane $pane in $session" >&2
+  return 1
+}
 
-  cleanup() {
+focus_nvim_window() {
+  local socket="$1"
+  local window="$2"
+  nvim_remote_expr "$socket" "win_gotoid($window)" >/dev/null
+  for _ in {1..150}; do
+    [[ "$(nvim_remote_expr "$socket" 'win_getid()')" == "$window" ]] && {
+      sleep 0.1
+      return 0
+    }
+    sleep 0.02
+  done
+  echo "could not focus Neovim window $window" >&2
+  return 1
+}
+
+wait_for_niri_window() {
+  local expected="$1"
+  for _ in {1..150}; do
+    if [[ "$(niri msg --json focused-window | jq -r '.id // empty')" == "$expected" ]]; then
+      sleep 0.05
+      return 0
+    fi
+    sleep 0.02
+  done
+  echo "Niri focused window did not become $expected" >&2
+  return 1
+}
+
+focus_niri_window() {
+  local window="$1"
+  niri msg action focus-window --id "$window" >/dev/null
+  wait_for_niri_window "$window"
+}
+
+focused_workspace() {
+  niri msg --json workspaces | jq -c '.[] | select(.is_focused)'
+}
+
+focus_fresh_workspace() {
+  focus_niri_window "$original_window"
+  local output idx
+  output="$(focused_workspace | jq -r '.output')"
+  idx="$(niri msg --json workspaces | jq -r --arg output "$output" \
+    '[.[] | select(.output == $output and .active_window_id == null and .name == null)]
+      | max_by(.idx) | .idx // empty')"
+  if [[ -z "$idx" ]]; then
+    echo "could not find Niri's trailing empty workspace on $output" >&2
+    return 1
+  fi
+  niri msg action focus-workspace "$idx" >/dev/null
+  for _ in {1..150}; do
+    local current
+    current="$(focused_workspace)"
+    if [[ "$(jq -r '.output' <<<"$current")" == "$output" &&
+    "$(jq -r '.idx' <<<"$current")" == "$idx" &&
+    "$(jq -r '.active_window_id' <<<"$current")" == null ]]; then
+      return 0
+    fi
+    sleep 0.02
+  done
+  echo "could not focus the empty workspace on $output" >&2
+  return 1
+}
+
+name_focused_workspace() {
+  local name="$1"
+  niri msg action set-workspace-name "$name" >/dev/null
+  for _ in {1..150}; do
+    if niri msg --json workspaces | jq -e --arg name "$name" \
+      '.[] | select(.name == $name and .is_focused)' >/dev/null; then
+      return 0
+    fi
+    sleep 0.02
+  done
+  echo "could not name test workspace $name" >&2
+  return 1
+}
+
+move_window_column_last() {
+  local window="$1"
+  focus_niri_window "$window"
+  niri msg action move-column-to-last >/dev/null
+}
+
+launch_terminal() {
+  local title="$1"
+  local pid_file="$2"
+  launch_ghostty "$terminal_fixture" "$title" "$pid_file"
+  wait_for_file "$pid_file"
+  wait_for_window "$title" exact
+}
+
+launch_nvim() {
+  local title="$1"
+  local socket="$2"
+  local count="$3"
+  local layout='set splitright | only'
+  local _
+  for ((_ = 1; _ < count; _++)); do
+    layout+=' | vsplit'
+  done
+  launch_ghostty nvim --listen "$socket" \
+    -c "set title titlestring=$title | $layout"
+  wait_for_socket "$socket"
+  wait_for_nvim_count "$socket" "$count"
+  wait_for_window "$title" exact
+}
+
+launch_zellij() {
+  local session="$1"
+  launch_ghostty zellij --session "$session"
+  wait_for_zellij_session "$session"
+  local window
+  window="$(wait_for_window "$session" contains)"
+  wait_for_zellij_count "$session" 1
+  sleep 0.6
+  printf '%s\n' "$window"
+}
+
+expect_state() {
+  local label="$1"
+  local expected_niri="$2"
+  local session="$3"
+  local expected_pane="$4"
+  local socket="$5"
+  local expected_nvim="$6"
+  local actual_niri actual_pane actual_nvim
+  for _ in {1..150}; do
+    actual_niri="$(niri msg --json focused-window | jq -r '.id // empty')"
+    actual_pane=-
+    actual_nvim=-
+    if [[ "$session" != - ]]; then
+      actual_pane="$(focused_zellij_pane "$session")"
+    fi
+    if [[ "$socket" != - ]]; then
+      actual_nvim="$(nvim_remote_expr "$socket" 'win_getid()')"
+    fi
+    if [[ "$actual_niri" == "$expected_niri" &&
+      "$actual_pane" == "$expected_pane" &&
+      "$actual_nvim" == "$expected_nvim" ]]; then
+      printf '  PASS: %s\n' "$label"
+      return 0
+    fi
+    sleep 0.02
+  done
+  printf '  FAIL: %s\n' "$label" >&2
+  printf '    expected niri=%s pane=%s nvim=%s\n' \
+    "$expected_niri" "$expected_pane" "$expected_nvim" >&2
+  printf '    actual   niri=%s pane=%s nvim=%s\n' \
+    "$actual_niri" "$actual_pane" "$actual_nvim" >&2
+  return 1
+}
+
+navigate_expect() {
+  local label="$1"
+  local direction="$2"
+  shift 2
+  niri-zvim "$direction"
+  expect_state "$label" "$@"
+}
+
+cleanup_case() {
+  local socket session pid_file pid workspace
+  for socket in "${nvim_sockets[@]}"; do
     if [[ -S "$socket" ]]; then
       nvim_remote_expr "$socket" 'execute("qa!")' >/dev/null 2>&1 || true
     fi
-    if [[ -n "$window" ]]; then
-      wait_for_window_gone "$window" || true
-    fi
-  }
-  trap cleanup EXIT
-  trap 'exit 130' INT
-  trap 'exit 143' TERM
-
-  launch_ghostty nvim \
-    --listen "$socket" \
-    --cmd "set title titlestring=$title" \
-    -c vsplit
-  wait_for_socket "$socket"
-  window="$(wait_for_window "$title" exact)"
-  wait_for_niri_window "$window"
-  sleep 0.1
-  nvim_remote_expr "$socket" 'execute("wincmd l")' >/dev/null
-  sleep 0.1
-
-  local right left
-  right="$(nvim_remote_expr "$socket" 'win_getid()')"
-  niri-zvim left
-  for _ in {1..100}; do
-    left="$(nvim_remote_expr "$socket" 'win_getid()')"
-    [[ "$left" != "$right" ]] && break
-    sleep 0.02
   done
-  [[ "$left" != "$right" ]] || {
-    echo "Neovim did not move left" >&2
-    return 1
-  }
-  [[ "$(niri msg --json focused-window | jq -r '.id // empty')" == "$window" ]] || {
-    echo "Niri left the direct Neovim window" >&2
-    return 1
-  }
-  niri-zvim right
-  wait_for_nvim_window "$socket" "$right"
-  printf '  windows %s -> %s -> %s; Niri stayed on window %s\n' \
-    "$right" "$left" "$right" "$window"
-)
-
-test_zellij_panes() (
-  set -euo pipefail
-  local session="niri-zvim-live-zellij-$tag"
-  local window=""
-
-  cleanup() {
+  for session in "${zellij_sessions[@]}"; do
     zellij kill-session "$session" >/dev/null 2>&1 || true
     zellij delete-session "$session" --force >/dev/null 2>&1 || true
-    if [[ -n "$window" ]]; then
-      wait_for_window_gone "$window" || true
+  done
+  for pid_file in "${terminal_pid_files[@]}"; do
+    if [[ -s "$pid_file" ]]; then
+      pid="$(<"$pid_file")"
+      kill "$pid" >/dev/null 2>&1 || true
     fi
-  }
-  trap cleanup EXIT
+  done
+  if ((${#test_windows[@]})); then
+    wait_for_windows_gone "${test_windows[@]}" || true
+  fi
+  for workspace in "${test_workspaces[@]}"; do
+    niri msg action unset-workspace-name "$workspace" >/dev/null 2>&1 || true
+  done
+  for pid_file in "${terminal_pid_files[@]}"; do
+    rm -f "$pid_file"
+  done
+}
+
+begin_case() {
+  test_windows=()
+  nvim_sockets=()
+  zellij_sessions=()
+  terminal_pid_files=()
+  test_workspaces=()
+  trap cleanup_case EXIT
   trap 'exit 130' INT
   trap 'exit 143' TERM
+}
 
-  launch_ghostty zellij --session "$session"
-  wait_for_zellij_session "$session"
-  window="$(wait_for_window "$session" contains)"
-  sleep 0.5
-  zellij --session "$session" action new-pane --direction right >/dev/null
-  sleep 0.3
-  wait_for_niri_window "$window"
-  sleep 0.1
+test_direct_terminal_matrix() (
+  set -euo pipefail
+  local -a test_windows nvim_sockets zellij_sessions terminal_pid_files test_workspaces
+  begin_case
+  local prefix="niri-zvim-live-$tag-direct"
+  local workspace="$prefix-workspace"
+  local empty_left_pid="$runtime_dir/$prefix-empty-left.pid"
+  local empty_middle_pid="$runtime_dir/$prefix-empty-middle.pid"
+  local empty_right_pid="$runtime_dir/$prefix-empty-right.pid"
+  local nvim_two_socket="$runtime_dir/$prefix-nvim-two.sock"
+  local nvim_three_socket="$runtime_dir/$prefix-nvim-three.sock"
+  terminal_pid_files+=("$empty_left_pid" "$empty_middle_pid" "$empty_right_pid")
+  nvim_sockets+=("$nvim_two_socket" "$nvim_three_socket")
 
-  local right left
-  right="$(focused_zellij_pane "$session")"
-  niri-zvim left
-  for _ in {1..100}; do
-    left="$(focused_zellij_pane "$session")"
-    [[ "$left" != "$right" ]] && break
-    sleep 0.02
-  done
-  [[ "$left" != "$right" ]] || {
-    echo "Zellij did not move left" >&2
-    return 1
-  }
-  niri-zvim right
-  wait_for_zellij_pane "$session" "$right"
-  [[ "$(niri msg --json focused-window | jq -r '.id // empty')" == "$window" ]] || {
-    echo "Niri left the Zellij window" >&2
-    return 1
-  }
-  printf '  panes %s -> %s -> %s; Niri stayed on window %s\n' \
-    "$right" "$left" "$right" "$window"
+  focus_fresh_workspace
+  local empty_left nvim_two empty_middle nvim_three empty_right
+  empty_left="$(launch_terminal "$prefix-empty-left" "$empty_left_pid")"
+  test_windows+=("$empty_left")
+  name_focused_workspace "$workspace"
+  test_workspaces+=("$workspace")
+  move_window_column_last "$empty_left"
+
+  nvim_two="$(launch_nvim "$prefix-nvim-two" "$nvim_two_socket" 2)"
+  test_windows+=("$nvim_two")
+  move_window_column_last "$nvim_two"
+  empty_middle="$(launch_terminal "$prefix-empty-middle" "$empty_middle_pid")"
+  test_windows+=("$empty_middle")
+  move_window_column_last "$empty_middle"
+  nvim_three="$(launch_nvim "$prefix-nvim-three" "$nvim_three_socket" 3)"
+  test_windows+=("$nvim_three")
+  move_window_column_last "$nvim_three"
+  empty_right="$(launch_terminal "$prefix-empty-right" "$empty_right_pid")"
+  test_windows+=("$empty_right")
+  move_window_column_last "$empty_right"
+
+  local -a nvim_two_ids nvim_three_ids
+  mapfile -t nvim_two_ids < <(nvim_window_ids "$nvim_two_socket")
+  mapfile -t nvim_three_ids < <(nvim_window_ids "$nvim_three_socket")
+  focus_nvim_window "$nvim_two_socket" "${nvim_two_ids[0]}"
+  focus_nvim_window "$nvim_three_socket" "${nvim_three_ids[0]}"
+  focus_niri_window "$empty_left"
+  expect_state "start in left empty terminal" "$empty_left" - - - -
+
+  navigate_expect "enter two-window Neovim" right \
+    "$nvim_two" - - "$nvim_two_socket" "${nvim_two_ids[0]}"
+  navigate_expect "move inside two-window Neovim" right \
+    "$nvim_two" - - "$nvim_two_socket" "${nvim_two_ids[1]}"
+  navigate_expect "leave Neovim for middle empty terminal" right \
+    "$empty_middle" - - - -
+  navigate_expect "enter three-window Neovim" right \
+    "$nvim_three" - - "$nvim_three_socket" "${nvim_three_ids[0]}"
+  navigate_expect "move to middle Neovim window" right \
+    "$nvim_three" - - "$nvim_three_socket" "${nvim_three_ids[1]}"
+  navigate_expect "move to right Neovim window" right \
+    "$nvim_three" - - "$nvim_three_socket" "${nvim_three_ids[2]}"
+  navigate_expect "leave Neovim for right empty terminal" right \
+    "$empty_right" - - - -
+  navigate_expect "re-enter three-window Neovim from right" left \
+    "$nvim_three" - - "$nvim_three_socket" "${nvim_three_ids[2]}"
+  navigate_expect "move left inside three-window Neovim" left \
+    "$nvim_three" - - "$nvim_three_socket" "${nvim_three_ids[1]}"
+  navigate_expect "reach left Neovim window" left \
+    "$nvim_three" - - "$nvim_three_socket" "${nvim_three_ids[0]}"
+  navigate_expect "leave for middle empty terminal" left \
+    "$empty_middle" - - - -
+  navigate_expect "re-enter two-window Neovim from right" left \
+    "$nvim_two" - - "$nvim_two_socket" "${nvim_two_ids[1]}"
+  navigate_expect "move left inside two-window Neovim" left \
+    "$nvim_two" - - "$nvim_two_socket" "${nvim_two_ids[0]}"
+  navigate_expect "return to left empty terminal" left \
+    "$empty_left" - - - -
 )
+
+test_zellij_single_pane() (
+  set -euo pipefail
+  local -a test_windows nvim_sockets zellij_sessions terminal_pid_files test_workspaces
+  begin_case
+  local prefix="niri-zvim-live-$tag-zellij-one"
+  local workspace="$prefix-workspace"
+  local left_pid="$runtime_dir/$prefix-left.pid"
+  local right_pid="$runtime_dir/$prefix-right.pid"
+  local session="$prefix-session"
+  terminal_pid_files+=("$left_pid" "$right_pid")
+  zellij_sessions+=("$session")
+
+  focus_fresh_workspace
+  local left zellij_window right pane
+  left="$(launch_terminal "$prefix-left" "$left_pid")"
+  test_windows+=("$left")
+  name_focused_workspace "$workspace"
+  test_workspaces+=("$workspace")
+  move_window_column_last "$left"
+  zellij_window="$(launch_zellij "$session")"
+  test_windows+=("$zellij_window")
+  move_window_column_last "$zellij_window"
+  right="$(launch_terminal "$prefix-right" "$right_pid")"
+  test_windows+=("$right")
+  move_window_column_last "$right"
+  pane="$(zellij_pane_ids "$session")"
+  focus_zellij_pane "$session" "$pane"
+  focus_niri_window "$left"
+
+  navigate_expect "enter single-pane Zellij" right \
+    "$zellij_window" "$session" "$pane" - -
+  navigate_expect "single pane falls through right" right "$right" - - - -
+  navigate_expect "re-enter single-pane Zellij" left \
+    "$zellij_window" "$session" "$pane" - -
+  navigate_expect "single pane falls through left" left "$left" - - - -
+)
+
+test_zellij_three_panes() (
+  set -euo pipefail
+  local -a test_windows nvim_sockets zellij_sessions terminal_pid_files test_workspaces
+  begin_case
+  local prefix="niri-zvim-live-$tag-zellij-three"
+  local workspace="$prefix-workspace"
+  local left_pid="$runtime_dir/$prefix-left.pid"
+  local right_pid="$runtime_dir/$prefix-right.pid"
+  local session="$prefix-session"
+  terminal_pid_files+=("$left_pid" "$right_pid")
+  zellij_sessions+=("$session")
+
+  focus_fresh_workspace
+  local left zellij_window right
+  left="$(launch_terminal "$prefix-left" "$left_pid")"
+  test_windows+=("$left")
+  name_focused_workspace "$workspace"
+  test_workspaces+=("$workspace")
+  move_window_column_last "$left"
+  zellij_window="$(launch_zellij "$session")"
+  test_windows+=("$zellij_window")
+  move_window_column_last "$zellij_window"
+  zellij --session "$session" action new-pane --direction right >/dev/null
+  wait_for_zellij_count "$session" 2
+  zellij --session "$session" action new-pane --direction right >/dev/null
+  wait_for_zellij_count "$session" 3
+  right="$(launch_terminal "$prefix-right" "$right_pid")"
+  test_windows+=("$right")
+  move_window_column_last "$right"
+
+  local -a panes
+  mapfile -t panes < <(zellij_pane_ids "$session")
+  focus_zellij_pane "$session" "${panes[0]}"
+  focus_niri_window "$left"
+  navigate_expect "enter left Zellij pane" right \
+    "$zellij_window" "$session" "${panes[0]}" - -
+  navigate_expect "move to middle Zellij pane" right \
+    "$zellij_window" "$session" "${panes[1]}" - -
+  navigate_expect "move to right Zellij pane" right \
+    "$zellij_window" "$session" "${panes[2]}" - -
+  navigate_expect "leave three-pane Zellij right" right "$right" - - - -
+  navigate_expect "re-enter right Zellij pane" left \
+    "$zellij_window" "$session" "${panes[2]}" - -
+  navigate_expect "move back to middle Zellij pane" left \
+    "$zellij_window" "$session" "${panes[1]}" - -
+  navigate_expect "move back to left Zellij pane" left \
+    "$zellij_window" "$session" "${panes[0]}" - -
+  navigate_expect "leave three-pane Zellij left" left "$left" - - - -
+)
+
+test_nested_nvim_in_zellij() (
+  set -euo pipefail
+  local -a test_windows nvim_sockets zellij_sessions terminal_pid_files test_workspaces
+  begin_case
+  local prefix="niri-zvim-live-$tag-nested"
+  local workspace="$prefix-workspace"
+  local left_pid="$runtime_dir/$prefix-left.pid"
+  local right_pid="$runtime_dir/$prefix-right.pid"
+  local session="$prefix-session"
+  local socket="$runtime_dir/$prefix-nvim.sock"
+  terminal_pid_files+=("$left_pid" "$right_pid")
+  zellij_sessions+=("$session")
+  nvim_sockets+=("$socket")
+
+  focus_fresh_workspace
+  local left zellij_window right
+  left="$(launch_terminal "$prefix-left" "$left_pid")"
+  test_windows+=("$left")
+  name_focused_workspace "$workspace"
+  test_workspaces+=("$workspace")
+  move_window_column_last "$left"
+  zellij_window="$(launch_zellij "$session")"
+  test_windows+=("$zellij_window")
+  move_window_column_last "$zellij_window"
+  zellij --session "$session" action new-pane --direction right --close-on-exit -- \
+    nvim --listen "$socket" -c 'set splitright | only | vsplit | vsplit' >/dev/null
+  wait_for_socket "$socket"
+  wait_for_nvim_count "$socket" 3
+  wait_for_zellij_count "$session" 2
+  zellij --session "$session" action new-pane --direction right >/dev/null
+  wait_for_zellij_count "$session" 3
+  right="$(launch_terminal "$prefix-right" "$right_pid")"
+  test_windows+=("$right")
+  move_window_column_last "$right"
+
+  local -a panes nvim_ids
+  mapfile -t panes < <(zellij_pane_ids "$session")
+  mapfile -t nvim_ids < <(nvim_window_ids "$socket")
+  focus_nvim_window "$socket" "${nvim_ids[0]}"
+  focus_zellij_pane "$session" "${panes[0]}"
+  focus_niri_window "$left"
+  navigate_expect "enter nested Zellij at left shell" right \
+    "$zellij_window" "$session" "${panes[0]}" - -
+  navigate_expect "move from shell into Neovim pane" right \
+    "$zellij_window" "$session" "${panes[1]}" "$socket" "${nvim_ids[0]}"
+  navigate_expect "move to middle nested Neovim window" right \
+    "$zellij_window" "$session" "${panes[1]}" "$socket" "${nvim_ids[1]}"
+  navigate_expect "move to right nested Neovim window" right \
+    "$zellij_window" "$session" "${panes[1]}" "$socket" "${nvim_ids[2]}"
+  navigate_expect "leave Neovim for right Zellij shell" right \
+    "$zellij_window" "$session" "${panes[2]}" - -
+  navigate_expect "leave nested Zellij right" right "$right" - - - -
+  navigate_expect "re-enter right Zellij shell" left \
+    "$zellij_window" "$session" "${panes[2]}" - -
+  navigate_expect "re-enter nested Neovim from right" left \
+    "$zellij_window" "$session" "${panes[1]}" "$socket" "${nvim_ids[2]}"
+  navigate_expect "move left in nested Neovim" left \
+    "$zellij_window" "$session" "${panes[1]}" "$socket" "${nvim_ids[1]}"
+  navigate_expect "reach left nested Neovim window" left \
+    "$zellij_window" "$session" "${panes[1]}" "$socket" "${nvim_ids[0]}"
+  navigate_expect "leave Neovim for left Zellij shell" left \
+    "$zellij_window" "$session" "${panes[0]}" - -
+  navigate_expect "leave nested Zellij left" left "$left" - - - -
+)
+
+test_workspace_navigation() (
+  set -euo pipefail
+  local -a test_windows nvim_sockets zellij_sessions terminal_pid_files test_workspaces
+  begin_case
+  local prefix="niri-zvim-live-$tag-workspaces"
+  local top_name="$prefix-top"
+  local middle_name="$prefix-middle"
+  local bottom_name="$prefix-bottom"
+  local top_pid="$runtime_dir/$top_name.pid"
+  local middle_pid="$runtime_dir/$middle_name.pid"
+  local bottom_pid="$runtime_dir/$bottom_name.pid"
+  terminal_pid_files+=("$top_pid" "$middle_pid" "$bottom_pid")
+  test_workspaces+=("$top_name" "$middle_name" "$bottom_name")
+
+  focus_fresh_workspace
+  local top middle bottom
+  top="$(launch_terminal "$top_name" "$top_pid")"
+  test_windows+=("$top")
+  name_focused_workspace "$top_name"
+
+  focus_fresh_workspace
+  middle="$(launch_terminal "$middle_name" "$middle_pid")"
+  test_windows+=("$middle")
+  name_focused_workspace "$middle_name"
+
+  focus_fresh_workspace
+  bottom="$(launch_terminal "$bottom_name" "$bottom_pid")"
+  test_windows+=("$bottom")
+  name_focused_workspace "$bottom_name"
+
+  local top_idx middle_idx bottom_idx
+  top_idx="$(niri msg --json workspaces | jq -r --arg name "$top_name" '.[] | select(.name == $name) | .idx')"
+  middle_idx="$(niri msg --json workspaces | jq -r --arg name "$middle_name" '.[] | select(.name == $name) | .idx')"
+  bottom_idx="$(niri msg --json workspaces | jq -r --arg name "$bottom_name" '.[] | select(.name == $name) | .idx')"
+  [[ "$middle_idx" -eq $((top_idx + 1)) && "$bottom_idx" -eq $((middle_idx + 1)) ]] || {
+    echo "test workspaces are not consecutive: $top_idx, $middle_idx, $bottom_idx" >&2
+    return 1
+  }
+
+  focus_niri_window "$top"
+  expect_state "start on top test workspace" "$top" - - - -
+  navigate_expect "workspace-aware down reaches middle" down "$middle" - - - -
+  navigate_expect "workspace-aware down reaches bottom" down "$bottom" - - - -
+  navigate_expect "workspace-aware up returns to middle" up "$middle" - - - -
+  navigate_expect "workspace-aware up returns to top" up "$top" - - - -
+)
+
+test_original_desktop_preserved() {
+  local current_windows current_workspaces
+  current_windows="$(niri msg --json windows)"
+  current_workspaces="$(niri msg --json workspaces)"
+  if ! jq -en --argjson before "$original_windows" --argjson after "$current_windows" '
+    all($before[]; . as $window |
+      any($after[]; .id == $window.id and .workspace_id == $window.workspace_id))
+  ' >/dev/null; then
+    echo "an original window was closed or moved to another workspace" >&2
+    return 1
+  fi
+  if ! jq -en --argjson before "$original_workspaces" --argjson after "$current_workspaces" '
+    all($before[] | select(.active_window_id != null or .name != null); . as $workspace |
+      any($after[]; .id == $workspace.id and .name == $workspace.name
+        and .output == $workspace.output))
+  ' >/dev/null; then
+    echo "an original named or occupied workspace was deleted or changed" >&2
+    return 1
+  fi
+  echo "  PASS: all original windows and user workspaces are unchanged"
+}
 
 failures=()
 run_case() {
   local name="$1"
   local function="$2"
+  local status
   printf '\n-- %s --\n' "$name"
-  if "$function"; then
+  "$function"
+  status=$?
+  if ((status == 0)); then
     printf 'PASS: %s\n' "$name"
   else
     failures+=("$name")
@@ -253,13 +706,18 @@ run_case() {
 }
 
 cat <<'EOF'
-This test opens and focuses disposable Ghostty windows.
-Do not use the mouse or keyboard until the final PASS/FAIL summary appears;
-changing focus while the test runs can produce incorrect results.
+This test opens and focuses disposable Ghostty windows and creates temporary
+named Niri workspaces. Do not use the mouse or keyboard until the final
+PASS/FAIL summary appears; changing focus can produce incorrect results.
+Only test processes and test workspace names are removed during cleanup.
 EOF
 
-run_case "direct Neovim navigation" test_direct_nvim
-run_case "Zellij pane navigation" test_zellij_panes
+run_case "empty terminals and direct Neovim matrix" test_direct_terminal_matrix
+run_case "single-pane Zellij boundaries" test_zellij_single_pane
+run_case "three-pane Zellij traversal" test_zellij_three_panes
+run_case "nested Neovim in Zellij traversal" test_nested_nvim_in_zellij
+run_case "workspace up/down traversal" test_workspace_navigation
+run_case "original desktop preservation" test_original_desktop_preserved
 
 printf '\n'
 if ((${#failures[@]})); then
