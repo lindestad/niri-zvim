@@ -76,7 +76,6 @@ fn metadata_topology_fingerprint(contents: &str) -> u64 {
         "are_floating_panes_visible ",
         "id ",
         "is_plugin ",
-        "is_focused ",
         "is_floating ",
         "is_suppressed ",
         "pane_x ",
@@ -147,6 +146,17 @@ mod tests {
         assert_ne!(
             metadata_topology_fingerprint(first),
             metadata_topology_fingerprint(resized)
+        );
+    }
+
+    #[test]
+    fn metadata_fingerprint_ignores_focus_only_changes() {
+        let first = "id 1\nis_focused false\npane_columns 40\n";
+        let focused = "id 1\nis_focused true\npane_columns 40\n";
+
+        assert_eq!(
+            metadata_topology_fingerprint(first),
+            metadata_topology_fingerprint(focused)
         );
     }
 }

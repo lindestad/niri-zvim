@@ -9,8 +9,42 @@ use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
     process::Command,
     sync::mpsc,
-    time::{Duration, sleep},
+    time::{Duration, Instant, sleep, sleep_until},
 };
+
+const FALLBACK_REFRESH_DELAY: Duration = Duration::from_millis(50);
+
+#[derive(Clone, Copy)]
+enum RefreshEvent {
+    Navigate(u64),
+    Acknowledge(u64),
+}
+
+#[derive(Default)]
+struct RefreshState {
+    pending_sequence: Option<u64>,
+}
+
+impl RefreshState {
+    fn update(&mut self, event: RefreshEvent) {
+        match event {
+            RefreshEvent::Navigate(sequence) => {
+                self.pending_sequence = Some(
+                    self.pending_sequence
+                        .map_or(sequence, |pending| pending.max(sequence)),
+                );
+            }
+            RefreshEvent::Acknowledge(sequence)
+                if self
+                    .pending_sequence
+                    .is_some_and(|pending| sequence >= pending) =>
+            {
+                self.pending_sequence = None;
+            }
+            RefreshEvent::Acknowledge(_) => {}
+        }
+    }
+}
 use tracing::{debug, info};
 
 use crate::daemon::DaemonEvent;
@@ -58,6 +92,7 @@ pub(super) async fn run_bridge(
     let mut stdin = child.stdin.take().context("Zellij pipe has no stdin")?;
     let stdout = child.stdout.take().context("Zellij pipe has no stdout")?;
     let (sink, mut actions) = mpsc::unbounded_channel();
+    let (refresh_tx, refresh_rx) = mpsc::unbounded_channel();
     let revisions = Arc::new(AtomicU64::new(0));
 
     if let Ok(state) = query_snapshot(session, window_id, 0).await {
@@ -76,6 +111,14 @@ pub(super) async fn run_bridge(
         sink.clone(),
         revisions.clone(),
     ));
+    let fallback_refresher = tokio::spawn(fallback_refresh_loop(
+        session.to_owned(),
+        window_id,
+        events.clone(),
+        sink.clone(),
+        revisions.clone(),
+        refresh_rx,
+    ));
 
     let bind = serde_json::to_vec(&DaemonMessage::BindNiriWindow {
         window_id,
@@ -86,15 +129,12 @@ pub(super) async fn run_bridge(
     stdin.flush().await?;
     info!(%session, window_id, "connected Zellij bridge");
 
-    let refresh_session = session.to_owned();
-    let refresh_events = events.clone();
-    let refresh_sink = sink.clone();
-    let action_revisions = revisions.clone();
+    let action_refresh = refresh_tx.clone();
     tokio::spawn(async move {
         while let Some(message) = actions.recv().await {
-            let should_refresh = match &message {
-                DaemonMessage::Navigate { .. } => true,
-                DaemonMessage::BindNiriWindow { .. } => false,
+            let sequence = match &message {
+                DaemonMessage::Navigate { sequence, .. } => Some(*sequence),
+                DaemonMessage::BindNiriWindow { .. } => None,
             };
             let Ok(mut encoded) = serde_json::to_vec(&message) else {
                 continue;
@@ -103,23 +143,8 @@ pub(super) async fn run_bridge(
             if stdin.write_all(&encoded).await.is_err() || stdin.flush().await.is_err() {
                 break;
             }
-            if should_refresh {
-                let revision = action_revisions.fetch_add(1, Ordering::Relaxed) + 1;
-                let session = refresh_session.clone();
-                let events = refresh_events.clone();
-                let sink = refresh_sink.clone();
-                tokio::spawn(async move {
-                    sleep(Duration::from_millis(20)).await;
-                    if let Ok(mut state) = query_snapshot(&session, window_id, 0).await {
-                        state.revision = revision;
-                        let _ = events
-                            .send(DaemonEvent::Adapter {
-                                message: AdapterMessage::ZellijSnapshot { state },
-                                sink,
-                            })
-                            .await;
-                    }
-                });
+            if let Some(sequence) = sequence {
+                let _ = action_refresh.send(RefreshEvent::Navigate(sequence));
             }
         }
     });
@@ -128,6 +153,9 @@ pub(super) async fn run_bridge(
     while let Some(line) = lines.next_line().await? {
         match serde_json::from_str::<AdapterMessage>(&line) {
             Ok(AdapterMessage::ZellijSnapshot { mut state }) => {
+                if let Some(sequence) = state.acknowledged_sequence {
+                    let _ = refresh_tx.send(RefreshEvent::Acknowledge(sequence));
+                }
                 state.client.client_id = 0;
                 state.niri_window_id = window_id;
                 state.revision = revisions.fetch_add(1, Ordering::Relaxed) + 1;
@@ -151,5 +179,75 @@ pub(super) async fn run_bridge(
     }
     let status = child.wait().await?;
     metadata_watcher.abort();
+    fallback_refresher.abort();
     anyhow::bail!("Zellij pipe exited with {status}")
+}
+
+async fn fallback_refresh_loop(
+    session: String,
+    window_id: u64,
+    events: mpsc::Sender<DaemonEvent>,
+    sink: mpsc::UnboundedSender<DaemonMessage>,
+    revisions: Arc<AtomicU64>,
+    mut refreshes: mpsc::UnboundedReceiver<RefreshEvent>,
+) {
+    let mut state = RefreshState::default();
+    while let Some(event) = refreshes.recv().await {
+        state.update(event);
+        if state.pending_sequence.is_none() {
+            continue;
+        }
+
+        let timer = sleep_until(Instant::now() + FALLBACK_REFRESH_DELAY);
+        tokio::pin!(timer);
+        loop {
+            tokio::select! {
+                event = refreshes.recv() => {
+                    let Some(event) = event else {
+                        return;
+                    };
+                    let reset = matches!(event, RefreshEvent::Navigate(_));
+                    state.update(event);
+                    if state.pending_sequence.is_none() {
+                        break;
+                    }
+                    if reset {
+                        timer.as_mut().reset(Instant::now() + FALLBACK_REFRESH_DELAY);
+                    }
+                }
+                () = &mut timer => {
+                    state.pending_sequence = None;
+                    let Ok(mut snapshot) = query_snapshot(&session, window_id, 0).await else {
+                        break;
+                    };
+                    snapshot.revision = revisions.fetch_add(1, Ordering::Relaxed) + 1;
+                    if events.send(DaemonEvent::Adapter {
+                        message: AdapterMessage::ZellijSnapshot { state: snapshot },
+                        sink: sink.clone(),
+                    }).await.is_err() {
+                        return;
+                    }
+                    break;
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fallback_refreshes_coalesce_and_acknowledgements_cancel() {
+        let mut state = RefreshState::default();
+        state.update(RefreshEvent::Navigate(4));
+        state.update(RefreshEvent::Navigate(6));
+        assert_eq!(state.pending_sequence, Some(6));
+
+        state.update(RefreshEvent::Acknowledge(5));
+        assert_eq!(state.pending_sequence, Some(6));
+        state.update(RefreshEvent::Acknowledge(6));
+        assert_eq!(state.pending_sequence, None);
+    }
 }
