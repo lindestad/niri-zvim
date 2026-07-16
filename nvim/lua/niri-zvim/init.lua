@@ -5,7 +5,8 @@ local pipe
 local input = ""
 local revision = 0
 local instance_id = string.format("nvim-%d-%d", vim.fn.getpid(), uv.hrtime())
-local current_state
+local cached_neighbors
+local topology_dirty = true
 local reconnect_timer
 local publish_pending = false
 local terminal_focused = true
@@ -104,6 +105,14 @@ local function build_neighbors()
   return result
 end
 
+local function window_neighbors()
+  if topology_dirty or not cached_neighbors then
+    cached_neighbors = build_neighbors()
+    topology_dirty = false
+  end
+  return cached_neighbors
+end
+
 local function write(message)
   if pipe and pipe:is_active() then
     pipe:write(vim.json.encode(message) .. "\n")
@@ -111,16 +120,16 @@ local function write(message)
 end
 
 local function snapshot()
-  current_state = {
+  local state = {
     id = instance_id,
     parent = parent(),
     terminal_focused = terminal_focused,
     revision = revision,
     acknowledged_sequence = acknowledged_sequence or vim.NIL,
     focused_window = vim.api.nvim_get_current_win(),
-    window_neighbors = build_neighbors(),
+    window_neighbors = window_neighbors(),
   }
-  write({ type = "nvim_snapshot", state = current_state })
+  write({ type = "nvim_snapshot", state = state })
 end
 
 local function schedule_snapshot()
@@ -135,9 +144,9 @@ local function schedule_snapshot()
   end)
 end
 
-local function navigate(direction)
+local function navigate(direction, neighbors_by_window)
   local focused = tostring(vim.api.nvim_get_current_win())
-  local neighbors = build_neighbors()[focused]
+  local neighbors = neighbors_by_window[focused]
   local target = neighbors and neighbors[direction]
   if target and target ~= vim.NIL and vim.api.nvim_win_is_valid(target) then
     vim.api.nvim_set_current_win(target)
@@ -158,8 +167,9 @@ local function queue_navigation(sequence, direction)
     navigation_pending = false
     local queued = navigation_queue
     navigation_queue = {}
+    local neighbors = window_neighbors()
     for _, queued_navigation in ipairs(queued) do
-      navigate(queued_navigation.direction)
+      navigate(queued_navigation.direction, neighbors)
       acknowledged_sequence = queued_navigation.sequence
     end
     snapshot()
@@ -223,7 +233,6 @@ end
 function M.setup()
   local group = vim.api.nvim_create_augroup("niri_zvim", { clear = true })
   vim.api.nvim_create_autocmd({
-    "WinEnter",
     "WinNew",
     "WinClosed",
     "WinResized",
@@ -232,6 +241,13 @@ function M.setup()
     "TabClosed",
     "VimResized",
   }, {
+    group = group,
+    callback = function()
+      topology_dirty = true
+      schedule_snapshot()
+    end,
+  })
+  vim.api.nvim_create_autocmd("WinEnter", {
     group = group,
     callback = schedule_snapshot,
   })

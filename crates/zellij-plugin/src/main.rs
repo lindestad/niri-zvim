@@ -15,6 +15,20 @@ use zellij_tile::prelude::{
 const PUBLISH_RETRY_INTERVAL_SECONDS: f64 = 0.05;
 const MAX_PUBLISH_RETRIES: u8 = 20;
 
+type TopologySignature = Vec<(
+    usize,
+    u32,
+    bool,
+    bool,
+    bool,
+    bool,
+    usize,
+    usize,
+    usize,
+    usize,
+)>;
+type PaneNeighbors = BTreeMap<String, NeighborMap<u32>>;
+
 #[derive(Default)]
 struct Plugin {
     client_id: u16,
@@ -30,6 +44,8 @@ struct Plugin {
     publish_retries: u8,
     publish_retry_pending: bool,
     pane_manifest: Option<PaneManifest>,
+    topology_signature: TopologySignature,
+    neighbor_cache: BTreeMap<(usize, bool), PaneNeighbors>,
 }
 
 register_plugin!(Plugin);
@@ -70,6 +86,11 @@ impl ZellijPlugin for Plugin {
                 self.state_changed();
             }
             Event::PaneUpdate(manifest) => {
+                let signature = topology_signature(&manifest);
+                if signature != self.topology_signature {
+                    self.topology_signature = signature;
+                    self.neighbor_cache.clear();
+                }
                 self.pane_manifest = Some(manifest);
                 self.revision = self.revision.wrapping_add(1);
                 self.state_changed();
@@ -165,8 +186,8 @@ impl Plugin {
 
     fn publish(&mut self) -> bool {
         let (Some(pipe_id), Some(session), Some(niri_window_id)) = (
-            self.pipe_id.as_ref(),
-            self.session.as_ref(),
+            self.pipe_id.clone(),
+            self.session.clone(),
             self.niri_window_id,
         ) else {
             return false;
@@ -185,8 +206,11 @@ impl Plugin {
             self.pending_origin = None;
             self.predicted_focus = None;
         }
-        let pane_neighbors = if let Some(manifest) = self.pane_manifest.as_ref() {
-            pane_neighbors(manifest, tab, focused_pane)
+        let pane_neighbors = if self.pane_manifest.is_some() {
+            let Some(neighbors) = self.cached_neighbors(tab, focused_pane) else {
+                return false;
+            };
+            neighbors.clone()
         } else {
             let Ok(sessions) = get_session_list() else {
                 return false;
@@ -194,7 +218,7 @@ impl Plugin {
             let Some(session_info) = sessions
                 .live_sessions
                 .iter()
-                .find(|info| info.name == *session)
+                .find(|info| info.name == session)
             else {
                 return false;
             };
@@ -203,7 +227,7 @@ impl Plugin {
         let message = AdapterMessage::ZellijSnapshot {
             state: ZellijClientState {
                 client: ZellijClient {
-                    session: session.clone(),
+                    session,
                     client_id: self.client_id,
                 },
                 niri_window_id,
@@ -215,7 +239,7 @@ impl Plugin {
         };
         if let Ok(mut encoded) = serde_json::to_string(&message) {
             encoded.push('\n');
-            cli_pipe_output(pipe_id, &encoded);
+            cli_pipe_output(&pipe_id, &encoded);
             true
         } else {
             false
@@ -223,7 +247,7 @@ impl Plugin {
     }
 
     fn predicted_transition(
-        &self,
+        &mut self,
         direction: niri_zvim_core::Direction,
     ) -> (Option<u32>, Option<u32>) {
         let Ok((tab, observed)) = get_focused_pane_info() else {
@@ -233,13 +257,27 @@ impl Plugin {
             return (None, None);
         };
         let focused = self.predicted_focus.unwrap_or(observed);
-        let target = self.pane_manifest.as_ref().and_then(|manifest| {
-            pane_neighbors(manifest, tab, focused)
-                .get(&focused.to_string())?
-                .get(direction)
-                .copied()
-        });
+        let target = self
+            .cached_neighbors(tab, focused)
+            .and_then(|neighbors| neighbors.get(&focused.to_string()))
+            .and_then(|neighbors| neighbors.get(direction))
+            .copied();
         (Some(focused), target)
+    }
+
+    fn cached_neighbors(&mut self, tab: usize, focused_pane: u32) -> Option<&PaneNeighbors> {
+        let manifest = self.pane_manifest.as_ref()?;
+        let panes = manifest.panes.get(&tab)?;
+        let floating = panes
+            .iter()
+            .find(|pane| !pane.is_plugin && pane.id == focused_pane)?
+            .is_floating;
+        let key = (tab, floating);
+        if !self.neighbor_cache.contains_key(&key) {
+            self.neighbor_cache
+                .insert(key, pane_neighbors_for_layer(manifest, tab, floating));
+        }
+        self.neighbor_cache.get(&key)
     }
 }
 
@@ -255,13 +293,20 @@ fn pane_neighbors(
         .iter()
         .find(|pane| !pane.is_plugin && pane.id == focused_pane)
         .is_some_and(|pane| pane.is_floating);
+    pane_neighbors_for_layer(manifest, tab, focused_is_floating)
+}
+
+fn pane_neighbors_for_layer(manifest: &PaneManifest, tab: usize, floating: bool) -> PaneNeighbors {
+    let Some(panes) = manifest.panes.get(&tab) else {
+        return BTreeMap::new();
+    };
     let rectangles: Vec<_> = panes
         .iter()
         .filter(|pane| {
             !pane.is_plugin
                 && pane.is_selectable
                 && !pane.is_suppressed
-                && pane.is_floating == focused_is_floating
+                && pane.is_floating == floating
         })
         .map(|pane| {
             (
@@ -290,4 +335,29 @@ fn pane_neighbors(
             )
         })
         .collect()
+}
+
+fn topology_signature(manifest: &PaneManifest) -> TopologySignature {
+    let mut signature: Vec<_> = manifest
+        .panes
+        .iter()
+        .flat_map(|(tab, panes)| {
+            panes.iter().map(|pane| {
+                (
+                    *tab,
+                    pane.id,
+                    pane.is_plugin,
+                    pane.is_floating,
+                    pane.is_suppressed,
+                    pane.is_selectable,
+                    pane.pane_x,
+                    pane.pane_y,
+                    pane.pane_rows,
+                    pane.pane_columns,
+                )
+            })
+        })
+        .collect();
+    signature.sort_unstable();
+    signature
 }
