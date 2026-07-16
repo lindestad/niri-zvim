@@ -109,5 +109,8 @@ the per-case cap when debugging. Test Neovim instances use a minimal init from
 the repository rather than the user's configuration. Run one case in isolation
 with, for example, `scripts/test-live direct`.
 
+`scripts/test-live` handles preflight checks and orchestration. Shared fixture
+helpers and the individual scenario files live under `scripts/live-tests/`.
+
 The benchmark suite measures both in-memory optimistic routing and the Unix
 socket connect/write operation used by a keypress.
