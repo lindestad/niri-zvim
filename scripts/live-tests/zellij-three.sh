@@ -54,4 +54,9 @@ test_zellij_three_panes() (
   navigate_expect "move back to left Zellij pane" left \
     "$zellij_window" "$session" "${panes[0]}" - -
   navigate_expect "leave three-pane Zellij left" left "$left" - - - -
+
+  navigate_burst_expect "rapid right burst crosses all Zellij panes" right 4 \
+    "$right" "$session" "${panes[2]}" - -
+  navigate_burst_expect "rapid left burst crosses all Zellij panes" left 4 \
+    "$left" "$session" "${panes[0]}" - -
 )

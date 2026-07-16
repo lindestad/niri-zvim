@@ -13,7 +13,9 @@ Focus changes are applied optimistically. Repeated requests route against the
 predicted graph without waiting for acknowledgements; authoritative snapshots
 then confirm or reconcile the prediction.
 
-See docs/architecture.md for the protocol and invariants.
+See [docs/architecture.md](docs/architecture.md) for the protocol and
+invariants, and [docs/live-testing.md](docs/live-testing.md) for the desktop
+race tests and lessons from their fixtures.
 
 ## Install
 
@@ -103,11 +105,12 @@ names, verifies that the original windows and workspaces are unchanged, and
 restores the previously focused Niri window. Run it with a normal Niri window
 focused, not from overview or while a layer-shell surface owns keyboard focus.
 Each live operation fails after 3 seconds, with a 20-second overall safety cap
-per case. Failures print the last checkpoint plus the current Niri, Zellij,
-Neovim, and process state before cleanup. Set `NIRI_ZVIM_LIVE_TIMEOUT` to change
-the per-case cap when debugging. Test Neovim instances use a minimal init from
-the repository rather than the user's configuration. Run one case in isolation
-with, for example, `scripts/test-live direct`.
+per case. Failures print the last checkpoint, CPU load and pressure, plus the
+current Niri, Zellij, Neovim, and process state before cleanup. Set
+`NIRI_ZVIM_LIVE_TIMEOUT` to change the per-case cap when debugging. Test
+Neovim instances use a minimal init from the repository rather than the user's
+configuration. Run one case in isolation with, for example,
+`scripts/test-live direct`.
 
 `scripts/test-live` handles preflight checks and orchestration. Shared fixture
 helpers and the individual scenario files live under `scripts/live-tests/`.

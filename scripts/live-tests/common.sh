@@ -18,6 +18,9 @@ dump_live_state() {
   local reason="$1"
   local session socket
   printf '  debug: %s\n' "$reason" >&2
+  printf '  CPU strain: start=%s current=' "$test_start_cpu_strain" >&2
+  cpu_strain_snapshot >&2
+  printf '\n' >&2
   if [[ -r "$case_state_file" ]]; then
     printf '  last checkpoint: %s\n' "$(<"$case_state_file")" >&2
   fi
@@ -55,6 +58,25 @@ dump_live_state() {
   # shellcheck disable=SC2009
   ps -eo pid,ppid,etimes,stat,args |
     grep "[n]iri-zvim-live-$tag" >&2 || true
+}
+
+cpu_strain_snapshot() {
+  local -a load_fields
+  local load_1 load_5 load_15 pressure_kind pressure_10 pressure_60 pressure_300 pressure_rest
+  read -ra load_fields </proc/loadavg
+  load_1="${load_fields[0]}"
+  load_5="${load_fields[1]}"
+  load_15="${load_fields[2]}"
+  read -r pressure_kind pressure_10 pressure_60 pressure_300 pressure_rest \
+    </proc/pressure/cpu || true
+  [[ "$pressure_kind" == some ]] || {
+    pressure_10=unavailable
+    pressure_60=unavailable
+    pressure_300=unavailable
+  }
+  printf 'load=%s/%s/%s cpus=%s psi=%s,%s,%s' \
+    "$load_1" "$load_5" "$load_15" "$test_cpu_count" \
+    "$pressure_10" "$pressure_60" "$pressure_300"
 }
 
 wait_for_socket() {
@@ -360,6 +382,50 @@ expect_state() {
   return 1
 }
 
+assert_state_now() {
+  local label="$1"
+  local expected_niri="$2"
+  local session="$3"
+  local expected_pane="$4"
+  local socket="$5"
+  local expected_nvim="$6"
+  local actual_niri actual_pane=- actual_nvim=-
+  actual_niri="$(niri msg --json focused-window | jq -r '.id // empty')"
+  if [[ "$session" != - ]]; then
+    actual_pane="$(focused_zellij_pane "$session")"
+  fi
+  if [[ "$socket" != - ]]; then
+    actual_nvim="$(nvim_remote_expr "$socket" 'win_getid()')"
+  fi
+  if [[ "$actual_niri" == "$expected_niri" &&
+    "$actual_pane" == "$expected_pane" &&
+    "$actual_nvim" == "$expected_nvim" ]]; then
+    printf '  PASS: %s\n' "$label"
+    return 0
+  fi
+  printf '  FAIL: %s\n' "$label" >&2
+  printf '    expected niri=%s pane=%s nvim=%s\n' \
+    "$expected_niri" "$expected_pane" "$expected_nvim" >&2
+  printf '    actual   niri=%s pane=%s nvim=%s\n' \
+    "$actual_niri" "$actual_pane" "$actual_nvim" >&2
+  return 1
+}
+
+assert_nvim_now() {
+  local label="$1"
+  local socket="$2"
+  local expected="$3"
+  local actual
+  actual="$(nvim_remote_expr "$socket" 'win_getid()')"
+  if [[ "$actual" == "$expected" ]]; then
+    printf '  PASS: %s\n' "$label"
+    return 0
+  fi
+  printf '  FAIL: %s (expected nvim=%s, actual nvim=%s)\n' \
+    "$label" "$expected" "$actual" >&2
+  return 1
+}
+
 navigate_expect() {
   local label="$1"
   local direction="$2"
@@ -372,9 +438,26 @@ navigate_expect() {
   mark_state "completed: $label"
 }
 
+navigate_burst_expect() {
+  local label="$1"
+  local direction="$2"
+  local count="$3"
+  shift 3
+  local keypress
+  mark_state "sending $count rapid $direction commands: $label"
+  for ((keypress = 0; keypress < count; keypress++)); do
+    timeout --signal=TERM --kill-after=2s "${operation_timeout_seconds}s" \
+      niri-zvim "$direction"
+  done
+  sleep 1
+  assert_state_now "$label" "$@"
+  mark_state "completed rapid burst: $label"
+}
+
 cleanup_case() {
-  local status=$?
+  local status="${1:-$?}"
   local socket session pid_file pid workspace
+  set +e
   if ((status != 0)); then
     dump_live_state "case exited with status $status before cleanup" \
       >"$case_debug_file" 2>&1
@@ -408,6 +491,42 @@ cleanup_case() {
   rm -f "$runtime_dir"/niri-zvim-live-"$tag"-*.kdl
 }
 
+cleanup_timed_out_case() {
+  local socket session workspace
+  while IFS= read -r session; do
+    [[ -n "$session" ]] || continue
+    zellij kill-session "$session" >/dev/null 2>&1 || true
+    zellij delete-session "$session" --force >/dev/null 2>&1 || true
+  done < <(timeout 1s zellij list-sessions --short --no-formatting 2>/dev/null |
+    grep "niri-zvim-live-$tag" || true)
+  for _ in {1..60}; do
+    shopt -s nullglob
+    for socket in "$runtime_dir"/niri-zvim-live-"$tag"*.sock; do
+      [[ -S "$socket" ]] || continue
+      nvim_remote_expr "$socket" 'execute("qa!")' >/dev/null 2>&1 || true
+    done
+    shopt -u nullglob
+    pkill -TERM -f -- "niri-zvim-live-$tag" >/dev/null 2>&1 || true
+    sleep 0.05
+  done
+  for workspace in $(niri msg --json workspaces 2>/dev/null |
+    jq -r --arg tag "niri-zvim-live-$tag" \
+      '.[] | select((.name // "") | contains($tag)) | .name'); do
+    niri msg action unset-workspace-name "$workspace" >/dev/null 2>&1 || true
+  done
+  for _ in {1..150}; do
+    if ! niri msg --json windows 2>/dev/null |
+      jq -e --arg tag "niri-zvim-live-$tag" \
+        '.[] | select(.title | contains($tag))' >/dev/null; then
+      break
+    fi
+    sleep 0.02
+  done
+  rm -f "$runtime_dir"/niri-zvim-live-"$tag"*.sock \
+    "$runtime_dir"/niri-zvim-live-"$tag"*.pid \
+    "$runtime_dir"/niri-zvim-live-"$tag"*.kdl
+}
+
 begin_case() {
   test_windows=()
   nvim_sockets=()
@@ -416,8 +535,8 @@ begin_case() {
   test_workspaces=()
   launched_window=""
   trap cleanup_case EXIT
-  trap 'exit 130' INT
-  trap 'exit 143' TERM
+  trap 'trap - EXIT INT TERM; cleanup_case 130; exit 130' INT
+  trap 'trap - EXIT INT TERM; cleanup_case 143; exit 143' TERM
 }
 
 failures=()
@@ -428,7 +547,7 @@ run_case() {
   printf '\n-- %s --\n' "$name"
   rm -f "$case_debug_file"
   mark_state "starting case: $name"
-  timeout --signal=TERM --kill-after=8s "${case_timeout_seconds}s" \
+  timeout --signal=TERM --kill-after=15s "${case_timeout_seconds}s" \
     bash -c "$function"
   status=$?
   if ((status == 0)); then
@@ -436,6 +555,11 @@ run_case() {
   elif ((status == 124)); then
     failures+=("$name (timed out after ${case_timeout_seconds}s)")
     printf 'TIMEOUT: %s exceeded %ss\n' "$name" "$case_timeout_seconds" >&2
+    if [[ ! -s "$case_debug_file" ]]; then
+      dump_live_state "case timed out; child diagnostics were unavailable" \
+        >"$case_debug_file" 2>&1
+    fi
+    cleanup_timed_out_case
     if [[ -s "$case_debug_file" ]]; then
       sed 's/^/  /' "$case_debug_file" >&2
     fi

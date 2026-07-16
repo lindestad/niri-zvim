@@ -28,7 +28,7 @@ case "$selected_case" in
     ;;
 esac
 
-for command in ghostty jq niri niri-zvim nvim pkill systemctl timeout zellij; do
+for command in getconf ghostty jq niri niri-zvim nvim pkill systemctl timeout zellij; do
   command -v "$command" >/dev/null || {
     echo "$command is required" >&2
     exit 1
@@ -76,6 +76,8 @@ source "$live_tests_dir/nested.sh"
 source "$live_tests_dir/workspaces.sh"
 # shellcheck source=scripts/live-tests/preservation.sh
 source "$live_tests_dir/preservation.sh"
+test_cpu_count="$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo unknown)"
+test_start_cpu_strain="$(cpu_strain_snapshot)"
 
 restore_focus() {
   niri msg action focus-window --id "$original_window" >/dev/null 2>&1 || true
@@ -91,6 +93,7 @@ done < <(declare -F)
 export project_dir runtime_dir ghostty_config terminal_fixture nvim_fixture tag
 export operation_timeout_seconds case_state_file case_debug_file
 export original_window original_windows original_workspaces
+export test_cpu_count test_start_cpu_strain
 
 cat <<'EOF'
 This test opens and focuses disposable Ghostty windows and creates temporary

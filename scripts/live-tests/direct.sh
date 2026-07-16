@@ -77,4 +77,13 @@ test_direct_terminal_matrix() (
     "$nvim_two" - - "$nvim_two_socket" "${nvim_two_ids[0]}"
   navigate_expect "return to left empty terminal" left \
     "$empty_left" - - - -
+
+  navigate_burst_expect "rapid right burst crosses both Neovim instances" right 7 \
+    "$empty_right" - - "$nvim_three_socket" "${nvim_three_ids[2]}"
+  assert_nvim_now "rapid right burst leaves two-window Neovim at its right edge" \
+    "$nvim_two_socket" "${nvim_two_ids[1]}"
+  navigate_burst_expect "rapid left burst crosses both Neovim instances" left 7 \
+    "$empty_left" - - "$nvim_two_socket" "${nvim_two_ids[0]}"
+  assert_nvim_now "rapid left burst leaves three-window Neovim at its left edge" \
+    "$nvim_three_socket" "${nvim_three_ids[0]}"
 )

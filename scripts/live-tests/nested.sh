@@ -67,4 +67,9 @@ test_nested_nvim_in_zellij() (
   navigate_expect "leave Neovim for left Zellij shell" left \
     "$zellij_window" "$session" "${panes[0]}" - -
   navigate_expect "leave nested Zellij left" left "$left" - - - -
+
+  navigate_burst_expect "rapid right burst crosses nested Neovim and Zellij" right 6 \
+    "$right" "$session" "${panes[2]}" "$socket" "${nvim_ids[2]}"
+  navigate_burst_expect "rapid left burst crosses nested Neovim and Zellij" left 6 \
+    "$left" "$session" "${panes[0]}" "$socket" "${nvim_ids[0]}"
 )
