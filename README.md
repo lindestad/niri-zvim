@@ -17,10 +17,10 @@ See docs/architecture.md for the protocol and invariants.
 
 ## Install
 
-Requirements are Niri, Zellij 0.44, Neovim 0.10 or newer, Ghostty, Rust, and
-systemd user services. Install the binaries, adapters, and daemon with:
+Requirements are Niri, Zellij 0.44, Neovim 0.10 or newer, Ghostty, Rust, Just,
+and systemd user services. Install the binaries, adapters, and daemon with:
 
-    scripts/install
+    just install
 
 The installer puts the client and daemon in `~/.local/bin`, the Zellij plugin
 in `~/.config/zellij/plugins`, and the Neovim adapter in its user site runtime.
@@ -81,18 +81,25 @@ process is launched on a keypress.
 
 ## Development
 
-Run the checks and latency benchmarks with:
+Run the complete test suite, including the live desktop tests, and the latency
+benchmarks with:
+
+    just test
+    just bench
+
+The test command checks the required tool versions and active user services.
+For individual development checks, run:
 
     cargo test --workspace --exclude niri-zvim-zellij
     cargo clippy --workspace --all-targets --exclude niri-zvim-zellij -- -D warnings
     cargo clippy -p niri-zvim-zellij --target wasm32-wasip1 -- -D warnings
-    scripts/bench
 
-On a running Niri desktop, `scripts/test-live` launches disposable Ghostty
-windows and verifies direct Neovim and Zellij transitions through their RPC and
-JSON state APIs. It closes only the test windows/sessions and restores the
-previously focused Niri window. Run it with a normal Niri window focused, not
-from overview or while a layer-shell surface owns keyboard focus.
+The live part launches disposable Ghostty windows with an isolated test config
+and verifies direct Neovim and Zellij transitions through their RPC and JSON
+state APIs. Do not interact with the desktop until it finishes. It closes only
+the test windows/sessions and restores the previously focused Niri window. Run
+it with a normal Niri window focused, not from overview or while a layer-shell
+surface owns keyboard focus.
 
 The benchmark suite measures both in-memory optimistic routing and the Unix
 socket connect/write operation used by a keypress.

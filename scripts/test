@@ -1,0 +1,77 @@
+#!/usr/bin/env bash
+set -uo pipefail
+
+project_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ghostty_config="$project_dir/tests/ghostty.config"
+
+missing=()
+for command in cargo ghostty jq niri niri-zvim nvim rustup systemctl zellij; do
+  if ! command -v "$command" >/dev/null; then
+    missing+=("$command")
+  fi
+done
+if ((${#missing[@]})); then
+  printf 'Missing required commands: %s\n' "${missing[*]}" >&2
+  exit 1
+fi
+
+version_at_least() {
+  local actual="$1"
+  local minimum="$2"
+  [[ "$(printf '%s\n%s\n' "$minimum" "$actual" | sort -V | head -1)" == "$minimum" ]]
+}
+
+nvim_version="$(nvim --version | sed -n '1s/^NVIM v//p')"
+zellij_version="$(zellij --version | awk '{print $2}')"
+if ! version_at_least "$nvim_version" "0.10.0"; then
+  echo "Neovim 0.10.0 or newer is required (found $nvim_version)" >&2
+  exit 1
+fi
+if ! version_at_least "$zellij_version" "0.44.0"; then
+  echo "Zellij 0.44.0 or newer is required (found $zellij_version)" >&2
+  exit 1
+fi
+if [[ -z "${NIRI_SOCKET:-}" || ! -S "$NIRI_SOCKET" ]]; then
+  echo "A running Niri session is required (NIRI_SOCKET is not usable)" >&2
+  exit 1
+fi
+if ! systemctl --user is-active --quiet niri-zvim.service; then
+  echo "niri-zvim.service is not active; run 'just install' first" >&2
+  exit 1
+fi
+if ! systemctl --user is-active --quiet app-com.mitchellh.ghostty.service; then
+  echo "Ghostty's systemd user service is not active" >&2
+  exit 1
+fi
+if ! ghostty +validate-config --config-file="$ghostty_config" >/dev/null; then
+  echo "The live-test Ghostty configuration is invalid" >&2
+  exit 1
+fi
+
+echo "Dependencies ready: Ghostty $(ghostty +version | sed -n 's/^  - version: //p'), Zellij $zellij_version, Neovim $nvim_version"
+
+failures=()
+run_suite() {
+  local name="$1"
+  shift
+  printf '\n==> %s\n' "$name"
+  if "$@"; then
+    printf 'PASS: %s\n' "$name"
+  else
+    failures+=("$name")
+    printf 'FAIL: %s\n' "$name" >&2
+  fi
+}
+
+run_suite "Rust unit and integration tests" \
+  cargo test --manifest-path "$project_dir/Cargo.toml" \
+  --workspace --exclude niri-zvim-zellij
+run_suite "Live desktop navigation tests" "$project_dir/scripts/test-live"
+
+printf '\n'
+if ((${#failures[@]})); then
+  echo "Test run failed:"
+  printf '  - %s\n' "${failures[@]}"
+  exit 1
+fi
+echo "All test suites passed."
