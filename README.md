@@ -90,7 +90,7 @@ benchmarks with:
 The test command checks the required tool versions and active user services.
 For individual development checks, run:
 
-    cargo test --workspace --exclude niri-zvim-zellij
+    cargo test
     cargo clippy --workspace --all-targets --exclude niri-zvim-zellij -- -D warnings
     cargo clippy -p niri-zvim-zellij --target wasm32-wasip1 -- -D warnings
 
@@ -102,11 +102,12 @@ finishes. It terminates only test processes, removes only unique test workspace
 names, verifies that the original windows and workspaces are unchanged, and
 restores the previously focused Niri window. Run it with a normal Niri window
 focused, not from overview or while a layer-shell surface owns keyboard focus.
-Each live operation fails after 10 seconds, with a 60-second overall safety cap
+Each live operation fails after 3 seconds, with a 20-second overall safety cap
 per case. Failures print the last checkpoint plus the current Niri, Zellij,
 Neovim, and process state before cleanup. Set `NIRI_ZVIM_LIVE_TIMEOUT` to change
 the per-case cap when debugging. Test Neovim instances use a minimal init from
-the repository rather than the user's configuration.
+the repository rather than the user's configuration. Run one case in isolation
+with, for example, `scripts/test-live direct`.
 
 The benchmark suite measures both in-memory optimistic routing and the Unix
 socket connect/write operation used by a keypress.

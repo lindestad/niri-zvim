@@ -11,10 +11,23 @@ ghostty_config="$project_dir/tests/ghostty.config"
 terminal_fixture="$project_dir/tests/fixtures/terminal"
 nvim_fixture="$project_dir/tests/fixtures/nvim.lua"
 tag="$$"
-operation_timeout_seconds=10
-case_timeout_seconds="${NIRI_ZVIM_LIVE_TIMEOUT:-60}"
+operation_timeout_seconds=3
+case_timeout_seconds="${NIRI_ZVIM_LIVE_TIMEOUT:-20}"
+selected_case="${1:-all}"
 case_state_file="$runtime_dir/niri-zvim-live-$tag.state"
 case_debug_file="$runtime_dir/niri-zvim-live-$tag.debug"
+
+if (($# > 1)); then
+  echo "usage: scripts/test-live [all|direct|zellij-one|zellij-three|nested|workspaces]" >&2
+  exit 2
+fi
+case "$selected_case" in
+  all | direct | zellij-one | zellij-three | nested | workspaces) ;;
+  *)
+    echo "unknown live test case: $selected_case" >&2
+    exit 2
+    ;;
+esac
 
 for command in ghostty jq niri niri-zvim nvim pkill systemctl timeout zellij; do
   command -v "$command" >/dev/null || {
@@ -839,15 +852,25 @@ named Niri workspaces. Do not use the mouse or keyboard until the final
 PASS/FAIL summary appears; changing focus can produce incorrect results.
 Only test processes and test workspace names are removed during cleanup.
 EOF
-printf 'Each operation has a 10-second deadline; each complete case has a %s-second safety cap.\n' \
+printf 'Each operation has a 3-second deadline; each complete case has a %s-second safety cap.\n' \
   "$case_timeout_seconds"
 echo "Failures print a serialized state snapshot before the next case starts."
 
-run_case "empty terminals and direct Neovim matrix" test_direct_terminal_matrix
-run_case "single-pane Zellij boundaries" test_zellij_single_pane
-run_case "three-pane Zellij traversal" test_zellij_three_panes
-run_case "nested Neovim in Zellij traversal" test_nested_nvim_in_zellij
-run_case "workspace up/down traversal" test_workspace_navigation
+if [[ "$selected_case" == all || "$selected_case" == direct ]]; then
+  run_case "empty terminals and direct Neovim matrix" test_direct_terminal_matrix
+fi
+if [[ "$selected_case" == all || "$selected_case" == zellij-one ]]; then
+  run_case "single-pane Zellij boundaries" test_zellij_single_pane
+fi
+if [[ "$selected_case" == all || "$selected_case" == zellij-three ]]; then
+  run_case "three-pane Zellij traversal" test_zellij_three_panes
+fi
+if [[ "$selected_case" == all || "$selected_case" == nested ]]; then
+  run_case "nested Neovim in Zellij traversal" test_nested_nvim_in_zellij
+fi
+if [[ "$selected_case" == all || "$selected_case" == workspaces ]]; then
+  run_case "workspace up/down traversal" test_workspace_navigation
+fi
 run_case "original desktop preservation" test_original_desktop_preserved
 
 printf '\n'

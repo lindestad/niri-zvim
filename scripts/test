@@ -65,7 +65,7 @@ run_suite() {
 
 run_suite "Rust unit and integration tests" \
   cargo test --manifest-path "$project_dir/Cargo.toml" \
-  --workspace --exclude niri-zvim-zellij
+  --workspace
 run_suite "Live desktop navigation tests" "$project_dir/scripts/test-live"
 
 printf '\n'
