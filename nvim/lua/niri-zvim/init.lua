@@ -61,15 +61,21 @@ local function score(current, candidate, direction)
   local cy = current.y + current.height / 2
   local ox = candidate.x + candidate.width / 2
   local oy = candidate.y + candidate.height / 2
+  local current_right = current.x + current.width
+  local current_bottom = current.y + current.height
+  local candidate_right = candidate.x + candidate.width
+  local candidate_bottom = candidate.y + candidate.height
+  local vertically_overlaps = current.y < candidate_bottom and candidate.y < current_bottom
+  local horizontally_overlaps = current.x < candidate_right and candidate.x < current_right
   local primary, perpendicular
-  if direction == "left" and ox < cx then
-    primary, perpendicular = cx - ox, math.abs(cy - oy)
-  elseif direction == "right" and ox > cx then
-    primary, perpendicular = ox - cx, math.abs(cy - oy)
-  elseif direction == "up" and oy < cy then
-    primary, perpendicular = cy - oy, math.abs(cx - ox)
-  elseif direction == "down" and oy > cy then
-    primary, perpendicular = oy - cy, math.abs(cx - ox)
+  if direction == "left" and candidate_right <= current.x and vertically_overlaps then
+    primary, perpendicular = current.x - candidate_right, math.abs(cy - oy)
+  elseif direction == "right" and candidate.x >= current_right and vertically_overlaps then
+    primary, perpendicular = candidate.x - current_right, math.abs(cy - oy)
+  elseif direction == "up" and candidate_bottom <= current.y and horizontally_overlaps then
+    primary, perpendicular = current.y - candidate_bottom, math.abs(cx - ox)
+  elseif direction == "down" and candidate.y >= current_bottom and horizontally_overlaps then
+    primary, perpendicular = candidate.y - current_bottom, math.abs(cx - ox)
   else
     return nil
   end

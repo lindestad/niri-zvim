@@ -37,9 +37,10 @@ impl BridgeManager {
             if window.app_id.as_deref() != Some("com.mitchellh.ghostty") {
                 continue;
             }
-            let Some(session) = window.title.as_deref() else {
+            let Some(title) = window.title.as_deref() else {
                 continue;
             };
+            let session = session_from_title(title);
             if !session_socket_exists(session) || !self.sessions.insert(session.to_owned()) {
                 continue;
             }
@@ -66,6 +67,12 @@ impl BridgeManager {
     pub fn bridge_stopped(&mut self, session: &str) {
         self.sessions.remove(session);
     }
+}
+
+fn session_from_title(title: &str) -> &str {
+    title
+        .split_once(" | ")
+        .map_or(title, |(session, _command)| session)
 }
 
 async fn run_bridge(
@@ -282,7 +289,6 @@ fn metadata_topology_fingerprint(contents: &str) -> u64 {
 struct ListedPane {
     id: u32,
     is_plugin: bool,
-    is_focused: bool,
     is_floating: bool,
     is_suppressed: bool,
     is_selectable: bool,
@@ -298,7 +304,7 @@ async fn query_snapshot(
     window_id: u64,
     client_id: u16,
 ) -> anyhow::Result<ZellijClientState> {
-    let output = Command::new("zellij")
+    let panes = Command::new("zellij")
         .args([
             "--session",
             session,
@@ -311,23 +317,48 @@ async fn query_snapshot(
         .await
         .with_context(|| format!("could not list panes in Zellij session {session}"))?;
     anyhow::ensure!(
-        output.status.success(),
+        panes.status.success(),
         "could not list panes in Zellij session {session}"
     );
-    let panes: Vec<ListedPane> = serde_json::from_slice(&output.stdout)?;
-    snapshot_from_panes(session, window_id, client_id, &panes)
+    let clients = Command::new("zellij")
+        .args(["--session", session, "action", "list-clients"])
+        .output()
+        .await
+        .with_context(|| format!("could not list clients in Zellij session {session}"))?;
+    anyhow::ensure!(
+        clients.status.success(),
+        "could not list clients in Zellij session {session}"
+    );
+    let focused_pane = focused_pane_from_clients(&clients.stdout)
+        .context("Zellij does not have exactly one connected terminal client")?;
+    let panes: Vec<ListedPane> = serde_json::from_slice(&panes.stdout)?;
+    snapshot_from_panes(session, window_id, client_id, focused_pane, &panes)
         .context("Zellij has no focused terminal pane")
+}
+
+fn focused_pane_from_clients(output: &[u8]) -> Option<u32> {
+    let output = std::str::from_utf8(output).ok()?;
+    let mut panes = output.lines().skip(1).filter_map(|line| {
+        line.split_whitespace()
+            .nth(1)?
+            .strip_prefix("terminal_")?
+            .parse::<u32>()
+            .ok()
+    });
+    let focused = panes.next()?;
+    panes.next().is_none().then_some(focused)
 }
 
 fn snapshot_from_panes(
     session: &str,
     window_id: u64,
     client_id: u16,
+    focused_pane: u32,
     panes: &[ListedPane],
 ) -> Option<ZellijClientState> {
     let focused = panes
         .iter()
-        .find(|pane| !pane.is_plugin && pane.is_focused)?;
+        .find(|pane| !pane.is_plugin && pane.id == focused_pane)?;
     let rectangles: Vec<_> = panes
         .iter()
         .filter(|pane| {
@@ -371,7 +402,7 @@ fn snapshot_from_panes(
         niri_window_id: window_id,
         revision: 0,
         acknowledged_sequence: None,
-        focused_pane: focused.id,
+        focused_pane,
         pane_neighbors,
     })
 }
@@ -416,11 +447,19 @@ mod tests {
     }
 
     #[test]
+    fn extracts_session_from_zellij_terminal_title() {
+        assert_eq!(
+            session_from_title("dev-session | nvim src/main.rs"),
+            "dev-session"
+        );
+        assert_eq!(session_from_title("dev-session"), "dev-session");
+    }
+
+    #[test]
     fn builds_initial_snapshot_from_listed_panes() {
-        let pane = |id, x, focused| ListedPane {
+        let pane = |id, x| ListedPane {
             id,
             is_plugin: false,
-            is_focused: focused,
             is_floating: false,
             is_suppressed: false,
             is_selectable: true,
@@ -430,12 +469,21 @@ mod tests {
             pane_columns: 40,
             tab_position: 0,
         };
-        let state =
-            snapshot_from_panes("dev", 42, 0, &[pane(1, 0, true), pane(2, 40, false)]).unwrap();
+        let state = snapshot_from_panes("dev", 42, 0, 1, &[pane(1, 0), pane(2, 40)]).unwrap();
 
         assert_eq!(state.focused_pane, 1);
         assert_eq!(state.pane_neighbors["1"].right, Some(2));
         assert_eq!(state.pane_neighbors["2"].left, Some(1));
+    }
+
+    #[test]
+    fn extracts_the_only_connected_terminal_client_focus() {
+        let one = b"CLIENT_ID ZELLIJ_PANE_ID RUNNING_COMMAND\n1 terminal_37 N/A\n";
+        let two =
+            b"CLIENT_ID ZELLIJ_PANE_ID RUNNING_COMMAND\n1 terminal_37 N/A\n2 terminal_9 N/A\n";
+
+        assert_eq!(focused_pane_from_clients(one), Some(37));
+        assert_eq!(focused_pane_from_clients(two), None);
     }
 
     #[test]

@@ -22,12 +22,13 @@ struct Plugin {
     niri_window_id: Option<u64>,
     revision: u64,
     pending_sequence: Option<u64>,
+    pending_origin: Option<u32>,
+    predicted_focus: Option<u32>,
     acknowledged_sequence: Option<u64>,
     pipe_id: Option<String>,
     input: String,
     publish_retries: u8,
     publish_retry_pending: bool,
-    active_tab: Option<usize>,
     pane_manifest: Option<PaneManifest>,
 }
 
@@ -64,16 +65,12 @@ impl ZellijPlugin for Plugin {
                 self.session = mode.session_name;
                 self.state_changed();
             }
-            Event::TabUpdate(tabs) => {
-                self.active_tab = tabs.iter().find(|tab| tab.active).map(|tab| tab.position);
+            Event::TabUpdate(_) => {
                 self.revision = self.revision.wrapping_add(1);
                 self.state_changed();
             }
             Event::PaneUpdate(manifest) => {
                 self.pane_manifest = Some(manifest);
-                if let Some(sequence) = self.pending_sequence.take() {
-                    self.acknowledged_sequence = Some(sequence);
-                }
                 self.revision = self.revision.wrapping_add(1);
                 self.state_changed();
             }
@@ -129,6 +126,9 @@ impl Plugin {
                 direction,
             } => {
                 self.pending_sequence = Some(sequence);
+                let (origin, target) = self.predicted_transition(direction);
+                self.pending_origin = origin;
+                self.predicted_focus = target;
                 move_focus(match direction {
                     niri_zvim_core::Direction::Left => ZellijDirection::Left,
                     niri_zvim_core::Direction::Down => ZellijDirection::Down,
@@ -163,7 +163,7 @@ impl Plugin {
         }
     }
 
-    fn publish(&self) -> bool {
+    fn publish(&mut self) -> bool {
         let (Some(pipe_id), Some(session), Some(niri_window_id)) = (
             self.pipe_id.as_ref(),
             self.session.as_ref(),
@@ -171,26 +171,23 @@ impl Plugin {
         ) else {
             return false;
         };
-        let cached_focus =
-            self.active_tab
-                .zip(self.pane_manifest.as_ref())
-                .and_then(|(tab, manifest)| {
-                    manifest.panes.get(&tab).and_then(|panes| {
-                        panes
-                            .iter()
-                            .find(|pane| !pane.is_plugin && pane.is_focused)
-                            .map(|pane| (pane.id, pane_neighbors(manifest, tab, pane.id)))
-                    })
-                });
-        let (focused_pane, pane_neighbors) = if let Some(cached_focus) = cached_focus {
-            cached_focus
+        let Ok((tab, focused)) = get_focused_pane_info() else {
+            return false;
+        };
+        let zellij_tile::prelude::PaneId::Terminal(focused_pane) = focused else {
+            return false;
+        };
+        if self
+            .pending_origin
+            .is_some_and(|origin| origin != focused_pane)
+        {
+            self.acknowledged_sequence = self.pending_sequence.take();
+            self.pending_origin = None;
+            self.predicted_focus = None;
+        }
+        let pane_neighbors = if let Some(manifest) = self.pane_manifest.as_ref() {
+            pane_neighbors(manifest, tab, focused_pane)
         } else {
-            let Ok((tab, focused)) = get_focused_pane_info() else {
-                return false;
-            };
-            let zellij_tile::prelude::PaneId::Terminal(focused_pane) = focused else {
-                return false;
-            };
             let Ok(sessions) = get_session_list() else {
                 return false;
             };
@@ -201,10 +198,7 @@ impl Plugin {
             else {
                 return false;
             };
-            (
-                focused_pane,
-                pane_neighbors(&session_info.panes, tab, focused_pane),
-            )
+            pane_neighbors(&session_info.panes, tab, focused_pane)
         };
         let message = AdapterMessage::ZellijSnapshot {
             state: ZellijClientState {
@@ -226,6 +220,26 @@ impl Plugin {
         } else {
             false
         }
+    }
+
+    fn predicted_transition(
+        &self,
+        direction: niri_zvim_core::Direction,
+    ) -> (Option<u32>, Option<u32>) {
+        let Ok((tab, observed)) = get_focused_pane_info() else {
+            return (None, None);
+        };
+        let zellij_tile::prelude::PaneId::Terminal(observed) = observed else {
+            return (None, None);
+        };
+        let focused = self.predicted_focus.unwrap_or(observed);
+        let target = self.pane_manifest.as_ref().and_then(|manifest| {
+            pane_neighbors(manifest, tab, focused)
+                .get(&focused.to_string())?
+                .get(direction)
+                .copied()
+        });
+        (Some(focused), target)
     }
 }
 
