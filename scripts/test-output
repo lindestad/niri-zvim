@@ -45,6 +45,13 @@ test_timeout() {
   printf '%bTIMEOUT%b: %s\n' "$TEST_RED" "$TEST_RESET" "$message" >&2
 }
 
+test_interrupted() {
+  local message="$1"
+  local prefix="${2:-}"
+  printf '%s%bINTERRUPTED%b: %s\n' \
+    "$prefix" "$TEST_YELLOW" "$TEST_RESET" "$message" >&2
+}
+
 test_success() {
   printf '%b%s%b\n' "$TEST_GREEN" "$1" "$TEST_RESET"
 }

@@ -271,10 +271,14 @@ pub async fn run_daemon() -> anyhow::Result<()> {
     info!(path = %path.display(), "listening");
 
     let (events_tx, mut events_rx) = mpsc::channel(1024);
-    start_event_thread(events_tx.clone());
+    let niri_state = start_event_thread(events_tx.clone());
     tokio::spawn(accept_loop(listener, events_tx.clone()));
 
-    let mut daemon = Daemon::new(NiriExecutor::start(niri_mode, events_tx.clone()));
+    let mut daemon = Daemon::new(NiriExecutor::start(
+        niri_mode,
+        events_tx.clone(),
+        niri_state,
+    ));
     let mut zellij = BridgeManager::default();
     while let Some(event) = events_rx.recv().await {
         if let DaemonEvent::NiriSnapshot { windows, .. } = &event {

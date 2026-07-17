@@ -88,17 +88,22 @@ begin_case() {
 }
 
 failures=()
+interruptions=()
 run_case() {
   local name="$1"
   local function="$2"
   local status
+  ((${#interruptions[@]} == 0)) || return 0
   printf '\n-- %s --\n' "$name"
-  rm -f "$case_debug_file"
+  rm -f "$case_debug_file" "$case_interruption_file"
   mark_state "starting case: $name"
   timeout --signal=TERM --kill-after=15s "${case_timeout_seconds}s" \
     bash -c "$function"
   status=$?
-  if ((status == 0)); then
+  if [[ -s "$case_interruption_file" ]]; then
+    interruptions+=("$name: $(<"$case_interruption_file")")
+    test_interrupted "$name"
+  elif ((status == 0)); then
     test_pass "$name"
   elif ((status == 124)); then
     failures+=("$name (timed out after ${case_timeout_seconds}s)")

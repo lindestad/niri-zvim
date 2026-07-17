@@ -1,4 +1,9 @@
-use std::{collections::HashMap, sync::mpsc, thread, time::Duration};
+use std::{
+    collections::{BTreeMap, HashMap},
+    sync::{Arc, Mutex, mpsc},
+    thread,
+    time::Duration,
+};
 
 use niri_ipc::{
     Action, Event, Request, Response, Window, WindowLayout,
@@ -16,6 +21,15 @@ use crate::{
 
 const SNAPSHOT_QUIET_PERIOD: Duration = Duration::from_millis(2);
 
+type ColumnKey = (Option<u64>, usize);
+type ColumnMembers = Vec<(usize, u64)>;
+type WorkspaceColumns = BTreeMap<usize, ColumnMembers>;
+
+#[derive(Clone, Default)]
+pub(crate) struct NiriState {
+    active_columns: Arc<Mutex<HashMap<ColumnKey, u64>>>,
+}
+
 pub struct NiriExecutor {
     actions: mpsc::Sender<NiriCommand>,
 }
@@ -27,7 +41,7 @@ struct NiriCommand {
 }
 
 impl NiriExecutor {
-    pub fn start(mode: NavigationMode, events: Sender<DaemonEvent>) -> Self {
+    pub fn start(mode: NavigationMode, events: Sender<DaemonEvent>, state: NiriState) -> Self {
         let (actions, receiver) = mpsc::channel();
         let (snapshots, snapshot_receiver) = mpsc::channel();
         thread::Builder::new()
@@ -36,7 +50,7 @@ impl NiriExecutor {
             .expect("failed to start niri action thread");
         thread::Builder::new()
             .name("niri-zvim-snapshots".into())
-            .spawn(move || snapshot_loop(snapshot_receiver, events))
+            .spawn(move || snapshot_loop(snapshot_receiver, events, state))
             .expect("failed to start niri snapshot thread");
         Self { actions }
     }
@@ -55,23 +69,26 @@ impl NiriExecutor {
     }
 }
 
-pub fn start_event_thread(events: Sender<DaemonEvent>) {
+pub fn start_event_thread(events: Sender<DaemonEvent>) -> NiriState {
+    let state = NiriState::default();
+    let thread_state = state.clone();
     thread::Builder::new()
         .name("niri-zvim-events".into())
-        .spawn(move || event_loop(events))
+        .spawn(move || event_loop(events, thread_state))
         .expect("failed to start niri event thread");
+    state
 }
 
-fn event_loop(events: Sender<DaemonEvent>) {
+fn event_loop(events: Sender<DaemonEvent>, state: NiriState) {
     loop {
-        if let Err(error) = event_stream(&events) {
+        if let Err(error) = event_stream(&events, &state) {
             warn!(%error, "niri event stream disconnected");
             thread::sleep(Duration::from_millis(250));
         }
     }
 }
 
-fn event_stream(events: &Sender<DaemonEvent>) -> anyhow::Result<()> {
+fn event_stream(events: &Sender<DaemonEvent>, column_state: &NiriState) -> anyhow::Result<()> {
     let mut socket = Socket::connect()?;
     let reply = socket.send(Request::EventStream)?;
     anyhow::ensure!(
@@ -92,7 +109,7 @@ fn event_stream(events: &Sender<DaemonEvent>) -> anyhow::Result<()> {
         );
         state.apply(event);
         if is_window_event {
-            let (windows, focused) = convert_windows(state.windows.windows.values());
+            let (windows, focused) = convert_windows(state.windows.windows.values(), column_state);
             events.blocking_send(DaemonEvent::NiriSnapshot {
                 windows,
                 focused,
@@ -148,7 +165,7 @@ fn action_loop(
     }
 }
 
-fn snapshot_loop(receiver: mpsc::Receiver<u64>, events: Sender<DaemonEvent>) {
+fn snapshot_loop(receiver: mpsc::Receiver<u64>, events: Sender<DaemonEvent>, state: NiriState) {
     let mut socket = None;
     while let Ok(first_sequence) = receiver.recv() {
         let sequence = coalesce_snapshot_sequence(first_sequence, &receiver);
@@ -156,7 +173,7 @@ fn snapshot_loop(receiver: mpsc::Receiver<u64>, events: Sender<DaemonEvent>) {
             warn!(sequence, "could not snapshot Niri after navigation");
             continue;
         };
-        let (windows, focused) = convert_windows(windows.iter());
+        let (windows, focused) = convert_windows(windows.iter(), &state);
         if events
             .blocking_send(DaemonEvent::NiriSnapshot {
                 windows,
@@ -208,6 +225,7 @@ fn niri_action(navigation: NiriNavigation) -> Action {
 
 fn convert_windows<'a>(
     windows: impl Iterator<Item = &'a Window>,
+    state: &NiriState,
 ) -> (Vec<NiriWindow>, Option<u64>) {
     let windows: Vec<_> = windows.collect();
     let focused = windows
@@ -231,6 +249,8 @@ fn convert_windows<'a>(
         neighbors.extend(directional_neighbors(rectangles));
     }
 
+    apply_scrolling_layout_neighbors(&windows, &mut neighbors, state);
+
     let converted = windows
         .into_iter()
         .map(|window| NiriWindow {
@@ -241,6 +261,91 @@ fn convert_windows<'a>(
         })
         .collect();
     (converted, focused)
+}
+
+fn apply_scrolling_layout_neighbors(
+    windows: &[&Window],
+    neighbors: &mut HashMap<u64, NeighborMap<u64>>,
+    state: &NiriState,
+) {
+    let mut workspaces: HashMap<Option<u64>, WorkspaceColumns> = HashMap::new();
+    for window in windows {
+        let Some((column, tile)) = window.layout.pos_in_scrolling_layout else {
+            continue;
+        };
+        workspaces
+            .entry(window.workspace_id)
+            .or_default()
+            .entry(column)
+            .or_default()
+            .push((tile, window.id));
+    }
+    for columns in workspaces.values_mut() {
+        for members in columns.values_mut() {
+            members.sort_unstable();
+        }
+    }
+
+    let mut active_columns = state
+        .active_columns
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    active_columns.retain(|(workspace, column), id| {
+        workspaces
+            .get(workspace)
+            .and_then(|columns| columns.get(column))
+            .is_some_and(|members| members.iter().any(|(_, member)| member == id))
+    });
+
+    if let Some(focused) = windows.iter().find(|window| window.is_focused)
+        && let Some((column, _)) = focused.layout.pos_in_scrolling_layout
+    {
+        active_columns.insert((focused.workspace_id, column), focused.id);
+    }
+
+    for (workspace, columns) in &workspaces {
+        for (column, members) in columns {
+            active_columns
+                .entry((*workspace, *column))
+                .or_insert_with(|| most_recent_window(windows, members));
+        }
+    }
+
+    for (workspace, columns) in &workspaces {
+        for (column, members) in columns {
+            let left = column
+                .checked_sub(1)
+                .and_then(|column| active_columns.get(&(*workspace, column)).copied());
+            let right = active_columns
+                .get(&(*workspace, column.saturating_add(1)))
+                .copied();
+            for (index, (_, id)) in members.iter().enumerate() {
+                neighbors.insert(
+                    *id,
+                    NeighborMap {
+                        left,
+                        down: members.get(index + 1).map(|(_, id)| *id),
+                        up: index.checked_sub(1).map(|index| members[index].1),
+                        right,
+                    },
+                );
+            }
+        }
+    }
+}
+
+fn most_recent_window(windows: &[&Window], members: &[(usize, u64)]) -> u64 {
+    members
+        .iter()
+        .max_by_key(|(_, id)| {
+            windows
+                .iter()
+                .find(|window| window.id == *id)
+                .and_then(|window| window.focus_timestamp)
+                .map(|timestamp| (timestamp.secs, timestamp.nanos))
+        })
+        .map(|(_, id)| *id)
+        .expect("columns contain at least one window")
 }
 
 fn layout_rect(layout: &WindowLayout) -> Option<Rect> {
@@ -314,5 +419,52 @@ mod tests {
         let rect = layout_rect(&layout).unwrap();
         assert_eq!((rect.x, rect.y), (3.0, 2.0));
         assert_eq!((rect.width, rect.height), (1.0, 1.0));
+    }
+
+    #[test]
+    fn horizontal_neighbors_follow_the_active_window_in_a_tabbed_column() {
+        let state = NiriState::default();
+        let mut windows = [
+            window(1, 1, 1, false),
+            window(2, 2, 1, false),
+            window(3, 2, 2, true),
+            window(4, 3, 1, false),
+        ];
+
+        convert_windows(windows.iter(), &state);
+        windows[2].is_focused = false;
+        windows[0].is_focused = true;
+        let (converted, focused) = convert_windows(windows.iter(), &state);
+        let converted: HashMap<_, _> = converted
+            .into_iter()
+            .map(|window| (window.id, window))
+            .collect();
+
+        assert_eq!(focused, Some(1));
+        assert_eq!(converted[&1].neighbors.right, Some(3));
+        assert_eq!(converted[&2].neighbors.down, Some(3));
+        assert_eq!(converted[&3].neighbors.up, Some(2));
+        assert_eq!(converted[&3].neighbors.right, Some(4));
+    }
+
+    fn window(id: u64, column: usize, tile: usize, is_focused: bool) -> Window {
+        Window {
+            id,
+            title: None,
+            app_id: None,
+            pid: None,
+            workspace_id: Some(1),
+            is_focused,
+            is_floating: false,
+            is_urgent: false,
+            layout: WindowLayout {
+                pos_in_scrolling_layout: Some((column, tile)),
+                tile_size: (100.0, 100.0),
+                window_size: (100, 100),
+                tile_pos_in_workspace_view: None,
+                window_offset_in_tile: (0.0, 0.0),
+            },
+            focus_timestamp: None,
+        }
     }
 }

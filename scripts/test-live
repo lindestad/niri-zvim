@@ -15,15 +15,16 @@ case_timeout_seconds="${NIRI_ZVIM_LIVE_TIMEOUT:-20}"
 selected_case="${1:-all}"
 case_state_file="$runtime_dir/niri-zvim-live-$tag.state"
 case_debug_file="$runtime_dir/niri-zvim-live-$tag.debug"
+case_interruption_file="$runtime_dir/niri-zvim-live-$tag.interrupted"
 # shellcheck source=scripts/test-output
 source "$project_dir/scripts/test-output"
 
 if (($# > 1)); then
-  echo "usage: scripts/test-live [all|direct|zellij-one|zellij-three|nested|consumed|consumed-zellij|consumed-reflow|consumed-nvim|workspaces]" >&2
+  echo "usage: scripts/test-live [all|direct|tabs|zellij-one|zellij-three|nested|consumed|consumed-zellij|consumed-reflow|consumed-nvim|workspaces]" >&2
   exit 2
 fi
 case "$selected_case" in
-  all | direct | zellij-one | zellij-three | nested | consumed | consumed-zellij | consumed-reflow | consumed-nvim | workspaces) ;;
+  all | direct | tabs | zellij-one | zellij-three | nested | consumed | consumed-zellij | consumed-reflow | consumed-nvim | workspaces) ;;
   *)
     echo "unknown live test case: $selected_case" >&2
     exit 2
@@ -68,6 +69,8 @@ original_workspaces="$(niri msg --json workspaces)"
 source "$live_tests_dir/common.sh"
 # shellcheck source=scripts/live-tests/direct.sh
 source "$live_tests_dir/direct.sh"
+# shellcheck source=scripts/live-tests/tabs.sh
+source "$live_tests_dir/tabs.sh"
 # shellcheck source=scripts/live-tests/zellij-one.sh
 source "$live_tests_dir/zellij-one.sh"
 # shellcheck source=scripts/live-tests/zellij-three.sh
@@ -85,7 +88,7 @@ test_start_cpu_strain="$(cpu_strain_snapshot)"
 
 restore_focus() {
   niri msg action focus-window --id "$original_window" >/dev/null 2>&1 || true
-  rm -f "$case_state_file" "$case_debug_file"
+  rm -f "$case_state_file" "$case_debug_file" "$case_interruption_file"
 }
 trap restore_focus EXIT
 trap 'exit 130' INT
@@ -95,7 +98,7 @@ while read -r _ _ function; do
   export -f "${function?}"
 done < <(declare -F)
 export project_dir runtime_dir ghostty_config terminal_fixture nvim_fixture tag
-export operation_timeout_seconds case_state_file case_debug_file
+export operation_timeout_seconds case_state_file case_debug_file case_interruption_file
 export original_window original_windows original_workspaces
 export test_cpu_count test_start_cpu_strain
 export TEST_RED TEST_GREEN TEST_YELLOW TEST_RESET
@@ -112,6 +115,9 @@ echo "Failures print a serialized state snapshot before the next case starts."
 
 if [[ "$selected_case" == all || "$selected_case" == direct ]]; then
   run_case "empty terminals and direct Neovim matrix" test_direct_terminal_matrix
+fi
+if [[ "$selected_case" == all || "$selected_case" == tabs ]]; then
+  run_case "Niri tabbed column traversal" test_niri_tabbed_column
 fi
 if [[ "$selected_case" == all || "$selected_case" == zellij-one ]]; then
   run_case "single-pane Zellij boundaries" test_zellij_single_pane
@@ -140,6 +146,11 @@ fi
 run_case "original desktop preservation" test_original_desktop_preserved
 
 printf '\n'
+if ((${#interruptions[@]})); then
+  test_interrupted "Live tests were interrupted by external focus changes"
+  printf '  - %s\n' "${interruptions[@]}" >&2
+  exit 2
+fi
 if ((${#failures[@]})); then
   test_failure_heading "Live tests failed:"
   printf '  - %s\n' "${failures[@]}"

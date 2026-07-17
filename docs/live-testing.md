@@ -10,6 +10,9 @@ scenario files in `scripts/live-tests/`. Every scenario gets a unique prefix,
 its own processes, and named temporary workspaces. Cleanup terminates only
 those processes, removes only those names, restores the original focus, and
 checks that the user's original windows and workspaces did not change.
+If focus moves to a window outside the test during an assertion, the harness
+stops running further scenarios and reports the run as interrupted rather than
+as a product failure.
 
 ## Two kinds of transition
 
@@ -22,8 +25,9 @@ They send a complete path as fast as separate `niri-zvim` clients can connect,
 wait one second only after the final command, and read each state once. The
 direct test crosses two Neovim instances and three plain terminals. The
 Zellij test crosses three panes between two terminals. The nested test crosses
-two terminals, three Zellij panes, and three Neovim windows. These cases prove
-both halves of optimistic navigation:
+two terminals, three Zellij panes, and three Neovim windows. The Niri-tabs test
+enters the active Neovim tab and immediately moves to its second split. These
+cases prove both halves of optimistic navigation:
 
 1. The daemon routes each new command against its predicted graph before an
    acknowledgement arrives.
@@ -40,8 +44,18 @@ normal tiled window. Building neighbors solely from that field produced an
 empty compositor graph. Slow navigation appeared correct because every focus
 event repaired the graph before the next keypress, while a burst predicted an
 unknown focus after its first Niri move and incorrectly sent every remaining
-command to Niri. The graph now prefers pixel coordinates but falls back to
-Niri's stable `(column, tile)` scrolling-layout indices.
+command to Niri. Tiled Niri windows now use stable `(column, tile)` indices in
+the same way as the configured actions: up/down follow tile order and
+left/right enter the neighboring column.
+
+Tabbed columns add an identity problem: Niri reports every member's column and
+tile index, but does not identify the active member once the column loses
+global focus. Predicting the first tile sends the next command to the wrong
+layer when another tab contains Neovim or Zellij. The adapter therefore keeps
+the last observed focused window for each column and uses it as the horizontal
+target. The tabs regression sends `right,right` without a delay: the first move
+enters the active Neovim tab and the second must stay in that tab and move to
+the next split.
 
 Neovim receives socket data outside the main editor event loop. Navigation is
 therefore copied into a FIFO queue and drained in one scheduled callback. Each
@@ -116,6 +130,7 @@ deadline.
 Run all tests with `just test`, or isolate a live scenario while debugging:
 
     scripts/test-live direct
+    scripts/test-live tabs
     scripts/test-live zellij-three
     scripts/test-live nested
     scripts/test-live consumed-zellij

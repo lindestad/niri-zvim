@@ -2,6 +2,23 @@
 # shellcheck shell=bash
 # shellcheck disable=SC2030,SC2031
 
+abort_on_external_focus() {
+  local expected="$1"
+  local actual="$2"
+  [[ -n "$actual" && "$actual" != "$expected" ]] || return 1
+
+  local focused id title reason
+  focused="$(niri msg --json focused-window)"
+  id="$(jq -r '.id // empty' <<<"$focused")"
+  title="$(jq -r '.title // empty' <<<"$focused")"
+  [[ "$id" == "$actual" && "$title" != *"niri-zvim-live-$tag"* ]] || return 1
+
+  reason="focus moved to external window $id ($title)"
+  printf '%s\n' "$reason" >"$case_interruption_file"
+  test_interrupted "$reason" "  "
+  return 0
+}
+
 expect_state() {
   local label="$1"
   local expected_niri="$2"
@@ -25,6 +42,9 @@ expect_state() {
       "$actual_nvim" == "$expected_nvim" ]]; then
       test_pass "$label" "  "
       return 0
+    fi
+    if abort_on_external_focus "$expected_niri" "$actual_niri"; then
+      return 1
     fi
     sleep 0.02
   done
@@ -56,6 +76,9 @@ assert_state_now() {
     "$actual_nvim" == "$expected_nvim" ]]; then
     test_pass "$label" "  "
     return 0
+  fi
+  if abort_on_external_focus "$expected_niri" "$actual_niri"; then
+    return 1
   fi
   test_fail "$label" "  "
   printf '    expected niri=%s pane=%s nvim=%s\n' \
@@ -99,6 +122,9 @@ expect_zellij_side() {
       test_pass "$label" "  "
       return 0
     fi
+    if abort_on_external_focus "$expected_niri" "$focused"; then
+      return 1
+    fi
     sleep 0.02
   done
   test_fail "$label" "  "
@@ -139,6 +165,9 @@ expect_nvim_changed() {
       "$pane" == "$expected_pane" ]]; then
       test_pass "$label" "  "
       return 0
+    fi
+    if abort_on_external_focus "$expected_niri" "$focused"; then
+      return 1
     fi
     sleep 0.02
   done

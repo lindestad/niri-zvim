@@ -98,20 +98,22 @@ For individual development checks, run:
     cargo clippy -p niri-zvim-zellij --target wasm32-wasip1 -- -D warnings
 
 The live part launches disposable Ghostty windows with an isolated test config.
-It traverses empty terminals, direct Neovim instances, one- and three-pane
-Zellij sessions, nested Neovim windows inside Zellij panes, and three temporary
-workspaces in both directions. Do not interact with the desktop until it
-finishes. It terminates only test processes, removes only unique test workspace
-names, verifies that the original windows and workspaces are unchanged, and
-restores the previously focused Niri window. Run it with a normal Niri window
-focused, not from overview or while a layer-shell surface owns keyboard focus.
+It traverses empty terminals, a Niri tabbed column, direct Neovim instances,
+one- and three-pane Zellij sessions, nested Neovim windows inside Zellij panes,
+and three temporary workspaces in both directions. Do not interact with the
+desktop until it finishes. Unexpected focus on a window outside the test is
+reported as an interrupted run rather than a navigation failure. The harness
+terminates only test processes, removes only unique test workspace names,
+verifies that the original windows and workspaces are unchanged, and restores
+the previously focused Niri window. Run it with a normal Niri window focused,
+not from overview or while a layer-shell surface owns keyboard focus.
 Each live operation fails after 3 seconds, with a 20-second overall safety cap
 per case. Failures print the last checkpoint, CPU load and pressure, plus the
 current Niri, Zellij, Neovim, and process state before cleanup. Set
 `NIRI_ZVIM_LIVE_TIMEOUT` to change the per-case cap when debugging. Test
 Neovim instances use a minimal init from the repository rather than the user's
 configuration. Run one case in isolation with, for example,
-`scripts/test-live direct`.
+`scripts/test-live tabs`.
 
 `scripts/test-live` handles preflight checks and orchestration. Shared fixture
 helpers and the individual scenario files live under `scripts/live-tests/`.

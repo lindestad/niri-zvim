@@ -26,14 +26,20 @@ and predictions for any later pending commands are replayed on top of it. If
 an adapter event is coalesced, an observation matching a stored expected target
 implicitly acknowledges the corresponding prefix of the pending queue.
 
-Directional topology follows tiled-editor semantics: a candidate must be
-beyond the requested edge and overlap on the perpendicular axis. Comparing
-centers alone invents vertical neighbors between a full-height pane and a
-stack beside it. Zellij can have several candidates along one shared edge and
-chooses the most recently active one. The daemon uses a deterministic candidate
-for prediction, while the plugin acknowledges any actual move away from the
+Nested pane topology follows tiled-editor semantics: a candidate must be beyond
+the requested edge and overlap on the perpendicular axis. Comparing centers
+alone invents vertical neighbors between a full-height pane and a stack beside
+it. Zellij can have several candidates along one shared edge and chooses the
+most recently active one. The daemon uses a deterministic candidate for
+prediction, while the plugin acknowledges any actual move away from the
 command's origin so Zellij's MRU choice can authoritatively correct that
 prediction.
+
+Niri topology instead mirrors the actions the daemon actually sends. Up and
+down follow tile order within a column; left and right enter the adjacent
+column's last observed active window. The event adapter retains that active
+window per column because Niri tabs share a column while the window snapshot
+does not identify the active member of an unfocused tabbed column.
 
 This means acknowledgements are not a queue barrier. If two requests arrive
 before the first focus event, the second request is routed against the first
