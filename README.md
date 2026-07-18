@@ -125,6 +125,9 @@ For individual Rust checks, run:
     cargo clippy -p niri-zvim-zellij --target wasm32-wasip1 -- -D warnings
 
 The live part launches disposable Ghostty windows with an isolated test config.
+Disposable Zellij sessions use an isolated permission cache that grants the
+repository's plugin only the four permissions documented above; the user's
+Zellij permission cache is not read or changed.
 It traverses empty terminals, a Niri tabbed column, direct Neovim instances,
 one- and three-pane Zellij sessions, nested Neovim windows inside Zellij panes,
 and three temporary workspaces in both directions. Do not interact with the

@@ -10,6 +10,7 @@ ghostty_config="$project_dir/tests/ghostty.config"
 terminal_fixture="$project_dir/tests/fixtures/terminal"
 nvim_fixture="$project_dir/tests/fixtures/nvim.lua"
 tag="$$"
+zellij_cache_home="$runtime_dir/niri-zvim-live-$tag-cache"
 operation_timeout_seconds=3
 case_timeout_seconds="${NIRI_ZVIM_LIVE_TIMEOUT:-20}"
 selected_case="${1:-all}"
@@ -65,6 +66,19 @@ fi
 original_windows="$(niri msg --json windows)"
 original_workspaces="$(niri msg --json workspaces)"
 
+zellij_plugin="${NIRI_ZVIM_ZELLIJ_PLUGIN:-$config_home/zellij/plugins/niri-zvim.wasm}"
+zellij_permission_dir="$zellij_cache_home/zellij"
+mkdir -p "$zellij_permission_dir"
+quoted_plugin_path="$(jq -Rn --arg value "$zellij_plugin" '$value')"
+{
+  printf '%s {\n' "$quoted_plugin_path"
+  printf '    ReadApplicationState\n'
+  printf '    ChangeApplicationState\n'
+  printf '    ReadCliPipes\n'
+  printf '    ReadSessionEnvironmentVariables\n'
+  printf '}\n'
+} >"$zellij_permission_dir/permissions.kdl"
+
 # shellcheck source=scripts/live-tests/common.sh
 source "$live_tests_dir/common.sh"
 # shellcheck source=scripts/live-tests/direct.sh
@@ -93,6 +107,7 @@ test_start_cpu_strain="$(cpu_strain_snapshot)"
 restore_focus() {
   niri msg action focus-window --id "$original_window" >/dev/null 2>&1 || true
   rm -f "$case_state_file" "$case_debug_file" "$case_interruption_file"
+  rm -rf "$zellij_cache_home"
 }
 trap restore_focus EXIT
 trap 'exit 130' INT
@@ -101,7 +116,7 @@ trap 'exit 143' TERM
 while read -r _ _ function; do
   export -f "${function?}"
 done < <(declare -F)
-export project_dir runtime_dir ghostty_config terminal_fixture nvim_fixture tag
+export project_dir runtime_dir ghostty_config terminal_fixture nvim_fixture tag zellij_cache_home
 export operation_timeout_seconds case_state_file case_debug_file case_interruption_file
 export original_window original_windows original_workspaces
 export test_cpu_count test_start_cpu_strain

@@ -210,9 +210,10 @@ launch_zellij() {
   mark_state "launching Zellij session $session"
   if [[ -n "$layout_string" ]]; then
     printf '%s\n' "$layout_string" >"$layout_file"
-    launch_ghostty zellij --session "$session" --new-session-with-layout "$layout_file"
+    launch_ghostty env XDG_CACHE_HOME="$zellij_cache_home" \
+      zellij --session "$session" --new-session-with-layout "$layout_file"
   else
-    launch_ghostty zellij --session "$session"
+    launch_ghostty env XDG_CACHE_HOME="$zellij_cache_home" zellij --session "$session"
   fi
   mark_state "waiting for Zellij session $session"
   wait_for_zellij_session "$session"
