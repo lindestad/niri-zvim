@@ -1,0 +1,50 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+project_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$project_dir"
+
+for command in cargo cmp grep sed; do
+  command -v "$command" >/dev/null || {
+    echo "$command is required" >&2
+    exit 1
+  }
+done
+
+package_flags=()
+if [[ -n "$(git status --porcelain)" ]]; then
+  package_flags+=(--allow-dirty)
+fi
+cargo package --workspace --exclude niri-zvim-zellij --locked \
+  "${package_flags[@]}"
+
+version="$(sed -n 's/^version = "\([^"]*\)"/\1/p' Cargo.toml)"
+core_package="$project_dir/target/package/niri-zvim-core-$version"
+app_package="$project_dir/target/package/niri-zvim-$version"
+
+for package in "$core_package" "$app_package"; do
+  [[ -f "$package/LICENSE" ]] || {
+    echo "$(basename "$package") does not contain LICENSE" >&2
+    exit 1
+  }
+  cmp "$project_dir/LICENSE" "$package/LICENSE"
+  if grep -Eq '\]\((docs/[^)]*|CHANGELOG\.md)\)' "$package/README.md"; then
+    echo "$(basename "$package") README contains repository-relative links" >&2
+    exit 1
+  fi
+done
+
+[[ ! -e "$app_package/tests/nvim_adapter.rs" ]] || {
+  echo "niri-zvim package contains the repository-only Neovim test" >&2
+  exit 1
+}
+if grep -q 'name = "nvim_adapter"' "$app_package/Cargo.toml"; then
+  echo "niri-zvim package declares the repository-only Neovim test" >&2
+  exit 1
+fi
+
+cargo test --manifest-path "$core_package/Cargo.toml" --locked
+cargo test \
+  --manifest-path "$app_package/Cargo.toml" \
+  --offline \
+  --config "patch.crates-io.niri-zvim-core.path=\"$core_package\""

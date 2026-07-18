@@ -22,15 +22,11 @@ shellcheck -x \
   scripts/bench \
   scripts/bench-live \
   scripts/check \
+  scripts/check-packages \
   scripts/install \
   scripts/test \
   scripts/test-live \
   scripts/test-output \
   tests/fixtures/terminal
 
-package_flags=()
-if [[ -n "$(git status --porcelain)" ]]; then
-  package_flags+=(--allow-dirty)
-fi
-cargo package --workspace --exclude niri-zvim-zellij --locked \
-  "${package_flags[@]}"
+scripts/check-packages
