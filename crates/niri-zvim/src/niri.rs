@@ -35,9 +35,9 @@ pub struct NiriExecutor {
 }
 
 #[derive(Clone, Copy)]
-struct NiriCommand {
-    sequence: u64,
-    direction: Direction,
+enum NiriCommand {
+    Navigate { sequence: u64, direction: Direction },
+    Configure(NavigationMode),
 }
 
 impl NiriExecutor {
@@ -58,12 +58,18 @@ impl NiriExecutor {
     pub fn navigate(&self, sequence: u64, direction: Direction) {
         if self
             .actions
-            .send(NiriCommand {
+            .send(NiriCommand::Navigate {
                 sequence,
                 direction,
             })
             .is_err()
         {
+            warn!("niri action worker stopped");
+        }
+    }
+
+    pub fn configure(&self, mode: NavigationMode) {
+        if self.actions.send(NiriCommand::Configure(mode)).is_err() {
             warn!("niri action worker stopped");
         }
     }
@@ -121,15 +127,21 @@ fn event_stream(events: &Sender<DaemonEvent>, column_state: &NiriState) -> anyho
 
 fn action_loop(
     receiver: mpsc::Receiver<NiriCommand>,
-    mode: NavigationMode,
+    mut mode: NavigationMode,
     snapshots: mpsc::Sender<u64>,
 ) {
     let mut socket = None;
-    while let Ok(NiriCommand {
-        sequence,
-        direction,
-    }) = receiver.recv()
-    {
+    while let Ok(command) = receiver.recv() {
+        let (sequence, direction) = match command {
+            NiriCommand::Navigate {
+                sequence,
+                direction,
+            } => (sequence, direction),
+            NiriCommand::Configure(configured) => {
+                mode = configured;
+                continue;
+            }
+        };
         let request = Request::Action(niri_action(mode.get(direction)));
 
         if socket.is_none() {
@@ -403,6 +415,25 @@ mod tests {
         assert!(matches!(
             niri_action(mode.get(Direction::Up)),
             Action::FocusWindowOrWorkspaceUp {}
+        ));
+    }
+
+    #[test]
+    fn executor_queues_runtime_configuration_changes() {
+        let (actions, receiver) = mpsc::channel();
+        let executor = NiriExecutor { actions };
+        let mode = NavigationMode {
+            left: NiriNavigation::ColumnOrMonitorLeft,
+            down: NiriNavigation::WindowOrWorkspaceDown,
+            up: NiriNavigation::WindowOrWorkspaceUp,
+            right: NiriNavigation::ColumnOrMonitorRight,
+        };
+
+        executor.configure(mode);
+
+        assert!(matches!(
+            receiver.recv().unwrap(),
+            NiriCommand::Configure(configured) if configured == mode
         ));
     }
 

@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use niri_zvim_core::NiriWindow;
 use tokio::{
@@ -22,6 +22,7 @@ pub(crate) fn configured_plugin_path() -> std::path::PathBuf {
 pub struct BridgeManager {
     discovery: ZellijDiscovery,
     sessions: BTreeMap<String, watch::Sender<Vec<u64>>>,
+    retiring: BTreeSet<String>,
 }
 
 impl BridgeManager {
@@ -29,7 +30,12 @@ impl BridgeManager {
         Self {
             discovery,
             sessions: BTreeMap::new(),
+            retiring: BTreeSet::new(),
         }
+    }
+
+    pub fn configure(&mut self, discovery: ZellijDiscovery) {
+        self.discovery = discovery;
     }
 
     pub fn observe(&mut self, windows: &[NiriWindow], events: &mpsc::Sender<DaemonEvent>) {
@@ -66,10 +72,15 @@ impl BridgeManager {
             .cloned()
             .collect();
         for session in stopped {
-            self.sessions.remove(&session);
+            if self.sessions.remove(&session).is_some() {
+                self.retiring.insert(session);
+            }
         }
 
         for (session, window_ids) in discovered {
+            if self.retiring.contains(&session) {
+                continue;
+            }
             if let Some(windows) = self.sessions.get(&session) {
                 windows.send_if_modified(|current| {
                     if *current == window_ids {
@@ -103,8 +114,8 @@ impl BridgeManager {
         }
     }
 
-    pub fn bridge_stopped(&mut self, session: &str) {
-        self.sessions.remove(session);
+    pub fn bridge_stopped(&mut self, session: &str) -> bool {
+        self.retiring.remove(session) || self.sessions.remove(session).is_some()
     }
 }
 
@@ -139,5 +150,21 @@ mod tests {
         };
         assert!(discovery.matches_app_id("org.wezfurlong.wezterm"));
         assert!(!discovery.matches_app_id("com.mitchellh.ghostty"));
+    }
+
+    #[test]
+    fn retiring_session_blocks_replacement_until_old_bridge_stops() {
+        let mut manager = BridgeManager::new(ZellijDiscovery::default());
+        let (windows, _receiver) = watch::channel(vec![7]);
+        manager.sessions.insert("dev-session".into(), windows);
+        let (events, _received) = mpsc::channel(1);
+
+        manager.observe(&[], &events);
+
+        assert!(!manager.sessions.contains_key("dev-session"));
+        assert!(manager.retiring.contains("dev-session"));
+        assert!(manager.bridge_stopped("dev-session"));
+        assert!(!manager.retiring.contains("dev-session"));
+        assert!(!manager.bridge_stopped("dev-session"));
     }
 }

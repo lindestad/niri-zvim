@@ -133,7 +133,9 @@ Inspect or validate the effective configuration without starting the daemon:
 
 Both commands accept `--json`. Niri fallthrough actions are sent over the
 daemon's persistent Niri IPC socket; no `niri msg` process is launched on a
-keypress.
+keypress. The daemon watches this file and applies valid mode and discovery
+changes without a restart. An invalid edit is logged and the last valid
+configuration remains active.
 
 ## Zellij discovery
 

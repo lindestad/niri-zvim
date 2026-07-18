@@ -3,7 +3,7 @@ use std::{
     fs,
     io::ErrorKind,
     os::unix::fs::PermissionsExt,
-    path::Path,
+    path::{Path, PathBuf},
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -18,12 +18,12 @@ use tokio::{
     io::{AsyncBufRead, AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader},
     net::{UnixListener, UnixStream},
     sync::{Semaphore, mpsc, oneshot},
-    time::timeout,
+    time::{MissedTickBehavior, interval, timeout},
 };
 use tracing::{debug, info, warn};
 
 use crate::{
-    config::Config,
+    config::{Config, config_path},
     niri::{NiriExecutor, start_event_thread},
     socket::socket_path,
     zellij::BridgeManager,
@@ -39,6 +39,7 @@ mod reconcile;
 const MAX_CONNECTIONS: usize = 128;
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(1);
 const MAX_ADAPTER_FRAME_BYTES: usize = 1024 * 1024;
+const CONFIG_POLL_INTERVAL: Duration = Duration::from_millis(250);
 pub(crate) const ADAPTER_OUTGOING_CAPACITY: usize = 64;
 
 type Sink = mpsc::Sender<DaemonMessage>;
@@ -175,6 +176,13 @@ impl Daemon {
             zellij,
             nvim,
         }
+    }
+
+    fn configure(&mut self, config: &Config) -> anyhow::Result<()> {
+        let mode = config.active_mode()?;
+        self.niri.configure(mode);
+        self.active_mode = config.active_mode_name().to_owned();
+        Ok(())
     }
 
     fn navigate(&mut self, direction: Direction) {
@@ -352,7 +360,7 @@ impl Daemon {
 }
 
 pub async fn run_daemon() -> anyhow::Result<()> {
-    let config = Config::load()?;
+    let mut config = Config::load_validated()?;
     let active_mode = config.active_mode_name().to_owned();
     let niri_mode = config.active_mode()?;
     let zellij_discovery = config.zellij_discovery()?.clone();
@@ -365,8 +373,10 @@ pub async fn run_daemon() -> anyhow::Result<()> {
     info!(path = %path.display(), "listening");
 
     let (events_tx, mut events_rx) = mpsc::channel(1024);
+    let (config_updates, mut config_rx) = mpsc::channel(1);
     let niri_state = start_event_thread(events_tx.clone());
     tokio::spawn(accept_loop(listener, events_tx.clone()));
+    tokio::spawn(watch_config(config_path(), config_updates));
 
     let mut daemon = Daemon::new(
         NiriExecutor::start(niri_mode, events_tx.clone(), niri_state),
@@ -374,16 +384,81 @@ pub async fn run_daemon() -> anyhow::Result<()> {
         path.display().to_string(),
     );
     let mut zellij = BridgeManager::new(zellij_discovery);
-    while let Some(event) = events_rx.recv().await {
-        if let DaemonEvent::NiriSnapshot { windows, .. } = &event {
-            zellij.observe(windows, &events_tx);
+    let mut niri_windows = Vec::new();
+    loop {
+        tokio::select! {
+            update = config_rx.recv() => {
+                let Some(()) = update else {
+                    break;
+                };
+                match Config::load_validated() {
+                    Ok(updated) if updated != config => {
+                        daemon.configure(&updated)?;
+                        zellij.configure(updated.zellij_discovery()?.clone());
+                        zellij.observe(&niri_windows, &events_tx);
+                        info!(mode = updated.active_mode_name(), "reloaded configuration");
+                        config = updated;
+                    }
+                    Ok(_) => {}
+                    Err(error) => {
+                        warn!(%error, "configuration reload rejected; keeping previous configuration");
+                    }
+                }
+            }
+            event = events_rx.recv() => {
+                let Some(event) = event else {
+                    break;
+                };
+                if let DaemonEvent::NiriSnapshot { windows, .. } = &event {
+                    niri_windows.clone_from(windows);
+                    zellij.observe(windows, &events_tx);
+                }
+                if let DaemonEvent::ZellijBridgeStopped { session } = &event
+                    && !zellij.bridge_stopped(session)
+                {
+                    continue;
+                }
+                let bridge_stopped = matches!(&event, DaemonEvent::ZellijBridgeStopped { .. });
+                daemon.handle(event);
+                if bridge_stopped {
+                    zellij.observe(&niri_windows, &events_tx);
+                }
+            }
         }
-        if let DaemonEvent::ZellijBridgeStopped { session } = &event {
-            zellij.bridge_stopped(session);
-        }
-        daemon.handle(event);
     }
     Ok(())
+}
+
+#[derive(PartialEq, Eq)]
+enum ConfigFingerprint {
+    Missing,
+    Contents(Vec<u8>),
+    Unreadable(ErrorKind, Option<i32>),
+}
+
+fn config_fingerprint(path: &Path) -> ConfigFingerprint {
+    match fs::read(path) {
+        Ok(contents) => ConfigFingerprint::Contents(contents),
+        Err(error) if error.kind() == ErrorKind::NotFound => ConfigFingerprint::Missing,
+        Err(error) => ConfigFingerprint::Unreadable(error.kind(), error.raw_os_error()),
+    }
+}
+
+async fn watch_config(path: PathBuf, updates: mpsc::Sender<()>) {
+    let mut previous = None;
+    let mut poll = interval(CONFIG_POLL_INTERVAL);
+    poll.set_missed_tick_behavior(MissedTickBehavior::Skip);
+    loop {
+        poll.tick().await;
+        let current = config_fingerprint(&path);
+        if previous.as_ref() == Some(&current) {
+            continue;
+        }
+        previous = Some(current);
+        if updates.send(()).await.is_err() {
+            break;
+        }
+    }
 }
 
 fn remove_stale_socket(path: &Path) -> anyhow::Result<()> {
@@ -696,5 +771,30 @@ mod tests {
         assert!(read_bounded_line(&mut reader, &mut frame).await.unwrap());
         assert_eq!(frame, b"{}");
         assert!(!read_bounded_line(&mut reader, &mut frame).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn config_watcher_reports_file_content_changes() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("config.json");
+        let (updates, mut received) = mpsc::channel(1);
+        let watcher = tokio::spawn(watch_config(path.clone(), updates));
+
+        timeout(Duration::from_secs(1), received.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        fs::write(&path, b"first").unwrap();
+        timeout(Duration::from_secs(1), received.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        fs::write(&path, b"second").unwrap();
+        timeout(Duration::from_secs(1), received.recv())
+            .await
+            .unwrap()
+            .unwrap();
+
+        watcher.abort();
     }
 }

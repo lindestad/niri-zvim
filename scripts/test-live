@@ -199,7 +199,7 @@ if [[ "$selected_case" == all || "$selected_case" == zellij-multi ]]; then
   run_case "multiple attached Zellij clients" test_zellij_multiple_clients
 fi
 if [[ "$selected_case" == all || "$selected_case" == discovery ]]; then
-  run_case "configured terminal discovery" test_configured_terminal_discovery
+  run_case "configuration reload and terminal discovery" test_configured_terminal_discovery
 fi
 if [[ "$selected_case" == all || "$selected_case" == nested ]]; then
   run_case "nested Neovim in Zellij traversal" test_nested_nvim_in_zellij

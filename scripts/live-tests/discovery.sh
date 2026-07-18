@@ -12,6 +12,7 @@ test_configured_terminal_discovery() (
   local right_pid="$runtime_dir/$prefix-right.pid"
   local daemon_pid_file="$runtime_dir/$prefix-daemon.pid"
   local isolated_config="$runtime_dir/$prefix-config.json"
+  local next_config="$runtime_dir/$prefix-config.next.json"
   local isolated_socket="$runtime_dir/$prefix.sock"
   local isolated_log="$runtime_dir/$prefix-daemon.log"
   local session="$prefix-session"
@@ -25,11 +26,19 @@ test_configured_terminal_discovery() (
 }'
   terminal_pid_files+=("$left_pid" "$right_pid" "$daemon_pid_file")
   zellij_sessions+=("$session")
-  case_files+=("$isolated_config" "$isolated_socket" "$isolated_log" "$layout_file")
+  case_files+=("$isolated_config" "$next_config" "$isolated_socket" "$isolated_log" "$layout_file")
 
-  jq --arg app_id "$app_id" '
+  jq '
+    .modes["live-local"] = {
+      left: "focus-column-left",
+      down: "focus-window-down",
+      up: "focus-window-up",
+      right: "focus-column-right"
+    } |
+    .modes["live-reloaded"] = .modes[.active_mode] |
+    .active_mode = "live-local" |
     .zellij = {
-      terminal_app_ids: [$app_id],
+      terminal_app_ids: ["dev.niri-zvim.not-enabled"],
       session_title_separator: " | "
     }
   ' "$daemon_config" >"$isolated_config"
@@ -37,6 +46,7 @@ test_configured_terminal_discovery() (
     NIRI_ZVIM_CONFIG="$isolated_config" \
     NIRI_ZVIM_SOCKET="$isolated_socket" \
     NIRI_ZVIM_ZELLIJ_PLUGIN="$zellij_plugin" \
+    RUST_LOG=info \
     "$HOME/.local/bin/niri-zvimd" >"$isolated_log" 2>&1 &
   printf '%s\n' "$!" >"$daemon_pid_file"
   wait_for_socket "$isolated_socket"
@@ -87,19 +97,58 @@ test_configured_terminal_discovery() (
   fi
   test_pass "custom terminal exposes its configured app ID" "  "
 
+  if niri-zvim status --json | jq -e --arg session "$session" \
+    '.zellij[] | select(.session == $session)' >/dev/null; then
+    test_fail "unlisted custom terminal remains undiscovered before reload" "  "
+    return 1
+  fi
+  test_pass "unlisted custom terminal remains undiscovered before reload" "  "
+
+  jq --arg app_id "$app_id" '
+    .active_mode = "live-reloaded" |
+    .zellij.terminal_app_ids = [$app_id]
+  ' "$isolated_config" >"$next_config"
+  mv "$next_config" "$isolated_config"
   for _ in {1..150}; do
-    if niri-zvim status --json 2>/dev/null | jq -e --arg session "$session" \
-      '.zellij[] | select(.session == $session and .connected)' >/dev/null; then
+    if niri-zvim status --json 2>/dev/null | jq -e --arg session "$session" '
+      .active_mode == "live-reloaded" and
+      any(.zellij[]; .session == $session and .connected)
+    ' >/dev/null; then
       break
     fi
     sleep 0.02
   done
-  niri-zvim status --json | jq -e --arg session "$session" \
-    '.zellij[] | select(.session == $session and .connected)' >/dev/null || {
-    test_fail "custom discovery connects the isolated Zellij bridge" "  "
+  niri-zvim status --json | jq -e --arg session "$session" '
+    .active_mode == "live-reloaded" and
+    any(.zellij[]; .session == $session and .connected)
+  ' >/dev/null || {
+    test_fail "valid reload updates mode and connects custom discovery" "  "
     return 1
   }
-  test_pass "custom discovery connects the isolated Zellij bridge" "  "
+  test_pass "valid reload updates mode and connects custom discovery" "  "
+
+  jq '.active_mode = "missing"' "$isolated_config" >"$next_config"
+  mv "$next_config" "$isolated_config"
+  for _ in {1..150}; do
+    if grep -q 'configuration reload rejected' "$isolated_log"; then
+      break
+    fi
+    sleep 0.02
+  done
+  if ! grep -q 'configuration reload rejected' "$isolated_log"; then
+    test_fail "invalid reload is rejected" "  "
+    return 1
+  fi
+  test_pass "invalid reload is rejected" "  "
+  if ! niri-zvim status --json | jq -e --arg session "$session" '
+      .active_mode == "live-reloaded" and
+      any(.zellij[]; .session == $session and .connected)
+    ' >/dev/null
+  then
+    test_fail "invalid reload retains the last valid configuration" "  "
+    return 1
+  fi
+  test_pass "invalid reload retains the last valid configuration" "  "
 
   launch_discovery_terminal "$prefix-right" "$right_pid"
   right="$launched_window"

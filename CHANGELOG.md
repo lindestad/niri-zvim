@@ -16,6 +16,8 @@
   `setup()` interface with socket/retry options and complete runtime teardown.
 - Add `config check` and `config show` commands for validating and inspecting
   the complete effective configuration.
+- Reload valid navigation and discovery configuration changes at runtime while
+  retaining the last valid configuration after a rejected edit.
 
 ## 0.1.1
 
