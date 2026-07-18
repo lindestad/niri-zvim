@@ -21,6 +21,14 @@ jobs:
           --component clippy,rustfmt --target wasm32-wasip1
       - name: Select Rust 1.97.1
         run: rustup override set 1.97.1
+      - name: Install Neovim 0.12.4
+        run: |
+          archive="$RUNNER_TEMP/nvim-linux-x86_64.tar.gz"
+          curl --fail --location --silent --show-error \
+            --output "$archive" \
+            https://github.com/neovim/neovim/releases/download/v0.12.4/nvim-linux-x86_64.tar.gz
+          tar --directory "$RUNNER_TEMP" --extract --gzip --file "$archive"
+          echo "$RUNNER_TEMP/nvim-linux-x86_64/bin" >> "$GITHUB_PATH"
       - name: Install ShellCheck
         run: |
           sudo apt-get update
