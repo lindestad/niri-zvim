@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+project_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=scripts/lib/install.sh
+source "$project_dir/scripts/lib/install.sh"
+
+test_dir="$(mktemp -d)"
+trap 'rm -rf "$test_dir"' EXIT
+
+mkdir -p "$test_dir/first" "$test_dir/second" "$test_dir/site"
+destination="$test_dir/site/niri-zvim"
+
+replace_managed_symlink "$test_dir/first" "$destination"
+[[ -L "$destination" ]]
+[[ "$(readlink "$destination")" == "$test_dir/first" ]]
+
+replace_managed_symlink "$test_dir/second" "$destination"
+[[ -L "$destination" ]]
+[[ "$(readlink "$destination")" == "$test_dir/second" ]]
+
+rm "$destination"
+mkdir "$destination"
+if replace_managed_symlink "$test_dir/first" "$destination" 2>/dev/null; then
+  echo "installer replaced a real directory" >&2
+  exit 1
+fi
+[[ -d "$destination" && ! -L "$destination" ]]
+[[ ! -e "$destination/first" ]]
