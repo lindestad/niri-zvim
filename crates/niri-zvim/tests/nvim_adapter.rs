@@ -100,6 +100,57 @@ fn nvim_publishes_topology_and_drains_queued_navigation() {
     child.wait().ok();
 }
 
+#[test]
+fn nvim_reports_a_focused_float_outside_normal_window_topology() {
+    let temp = tempfile::tempdir().unwrap();
+    let socket_path = temp.path().join("daemon.sock");
+    let listener = UnixListener::bind(&socket_path).unwrap();
+    let plugin = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../nvim")
+        .canonicalize()
+        .unwrap();
+    let mut child = Command::new("nvim")
+        .args([
+            "--clean",
+            "--headless",
+            "--cmd",
+            &format!("set runtimepath+={}", plugin.display()),
+            "--cmd",
+            "vsplit",
+            "--cmd",
+            r#"autocmd VimEnter * ++once lua local buffer = vim.api.nvim_create_buf(false, true); vim.api.nvim_open_win(buffer, true, { relative = "editor", row = 1, col = 1, width = 10, height = 2 })"#,
+        ])
+        .env("NIRI_ZVIM_SOCKET", &socket_path)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("Neovim must be installed for adapter tests");
+
+    let (mut stream, _) = listener.accept().unwrap();
+    stream
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .unwrap();
+    let mut magic = [0];
+    stream.read_exact(&mut magic).unwrap();
+    assert_eq!(magic[0], niri_zvim::adapter_magic());
+    let mut reader = BufReader::new(stream);
+
+    loop {
+        if let AdapterMessage::NvimSnapshot { state } = read_message(&mut reader)
+            && state.window_neighbors.len() == 2
+            && !state
+                .window_neighbors
+                .contains_key(&state.focused_window.to_string())
+        {
+            break;
+        }
+    }
+
+    child.kill().ok();
+    child.wait().ok();
+}
+
 fn read_message(reader: &mut BufReader<std::os::unix::net::UnixStream>) -> AdapterMessage {
     let mut line = String::new();
     reader.read_line(&mut line).unwrap();

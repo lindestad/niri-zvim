@@ -185,10 +185,13 @@ impl NavigationGraph {
             .nvim
             .get_mut(id)
             .expect("instance was selected from this map");
-        let Some(next) = state.window_neighbors[&state.focused_window.to_string()]
-            .get(direction)
-            .copied()
+        let Some(neighbors) = state
+            .window_neighbors
+            .get(&state.focused_window.to_string())
         else {
+            return false;
+        };
+        let Some(next) = neighbors.get(direction).copied() else {
             return false;
         };
         state.focused_window = next;
@@ -201,10 +204,10 @@ impl NavigationGraph {
             .zellij
             .get_mut(client)
             .expect("client was selected from this map");
-        let Some(next) = state.pane_neighbors[&state.focused_pane.to_string()]
-            .get(direction)
-            .copied()
-        else {
+        let Some(neighbors) = state.pane_neighbors.get(&state.focused_pane.to_string()) else {
+            return false;
+        };
+        let Some(next) = neighbors.get(direction).copied() else {
             return false;
         };
         state.focused_pane = next;
@@ -329,6 +332,26 @@ mod tests {
             graph.route_optimistically(Direction::Right),
             Ok(NavigationAction::Zellij { .. })
         ));
+    }
+
+    #[test]
+    fn adapter_focus_outside_its_topology_falls_through() {
+        let mut graph = nested_graph(Some(101), Some(11));
+        graph.nvim.get_mut("nvim-a").unwrap().focused_window = 999;
+
+        assert!(matches!(
+            graph.route_optimistically(Direction::Right),
+            Ok(NavigationAction::Zellij { .. })
+        ));
+
+        let client = graph.zellij.keys().next().unwrap().clone();
+        graph.zellij.get_mut(&client).unwrap().focused_pane = 999;
+        assert_eq!(
+            graph.route_optimistically(Direction::Right).unwrap(),
+            NavigationAction::Niri {
+                direction: Direction::Right
+            }
+        );
     }
 
     #[test]
