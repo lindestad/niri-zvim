@@ -4,6 +4,8 @@ use anyhow::Context;
 use niri_zvim_core::Direction;
 use serde::Deserialize;
 
+pub(crate) const GHOSTTY_APP_ID: &str = "com.mitchellh.ghostty";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 pub enum NiriNavigation {
     #[serde(rename = "focus-column-left")]
@@ -58,6 +60,48 @@ impl NavigationMode {
 pub struct Config {
     active_mode: String,
     modes: BTreeMap<String, NavigationMode>,
+    #[serde(default)]
+    zellij: ZellijDiscovery,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ZellijDiscovery {
+    pub terminal_app_ids: Vec<String>,
+    pub session_title_separator: String,
+}
+
+impl Default for ZellijDiscovery {
+    fn default() -> Self {
+        Self {
+            terminal_app_ids: vec![GHOSTTY_APP_ID.into()],
+            session_title_separator: " | ".into(),
+        }
+    }
+}
+
+impl ZellijDiscovery {
+    fn validate(&self) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            !self.terminal_app_ids.is_empty(),
+            "zellij.terminal_app_ids must contain at least one app ID"
+        );
+        anyhow::ensure!(
+            self.terminal_app_ids
+                .iter()
+                .all(|app_id| !app_id.trim().is_empty()),
+            "zellij.terminal_app_ids cannot contain an empty app ID"
+        );
+        anyhow::ensure!(
+            !self.session_title_separator.is_empty(),
+            "zellij.session_title_separator cannot be empty"
+        );
+        Ok(())
+    }
+
+    pub fn matches_app_id(&self, app_id: &str) -> bool {
+        self.terminal_app_ids.iter().any(|known| known == app_id)
+    }
 }
 
 impl Default for Config {
@@ -65,6 +109,7 @@ impl Default for Config {
         Self {
             active_mode: "default".into(),
             modes: BTreeMap::from([("default".into(), NavigationMode::workspace_local())]),
+            zellij: ZellijDiscovery::default(),
         }
     }
 }
@@ -93,6 +138,11 @@ impl Config {
     pub fn active_mode_name(&self) -> &str {
         &self.active_mode
     }
+
+    pub(crate) fn zellij_discovery(&self) -> anyhow::Result<&ZellijDiscovery> {
+        self.zellij.validate()?;
+        Ok(&self.zellij)
+    }
 }
 
 pub(crate) fn config_path() -> PathBuf {
@@ -117,6 +167,10 @@ mod tests {
 
         assert_eq!(mode.left, NiriNavigation::ColumnLeft);
         assert_eq!(mode.up, NiriNavigation::WindowUp);
+        assert_eq!(
+            config.zellij_discovery().unwrap(),
+            &ZellijDiscovery::default()
+        );
     }
 
     #[test]
@@ -158,5 +212,52 @@ mod tests {
         .unwrap();
 
         assert!(config.active_mode().is_err());
+    }
+
+    #[test]
+    fn loads_and_validates_custom_zellij_discovery() {
+        let config: Config = serde_json::from_str(
+            r#"{
+                "active_mode": "default",
+                "modes": {
+                    "default": {
+                        "left": "focus-column-left",
+                        "down": "focus-window-down",
+                        "up": "focus-window-up",
+                        "right": "focus-column-right"
+                    }
+                },
+                "zellij": {
+                    "terminal_app_ids": ["org.wezfurlong.wezterm"],
+                    "session_title_separator": " :: "
+                }
+            }"#,
+        )
+        .unwrap();
+        assert_eq!(
+            config.zellij_discovery().unwrap(),
+            &ZellijDiscovery {
+                terminal_app_ids: vec!["org.wezfurlong.wezterm".into()],
+                session_title_separator: " :: ".into(),
+            }
+        );
+
+        let invalid = ZellijDiscovery {
+            terminal_app_ids: Vec::new(),
+            session_title_separator: " | ".into(),
+        };
+        assert!(invalid.validate().is_err());
+
+        let blank_app_id = ZellijDiscovery {
+            terminal_app_ids: vec!["  ".into()],
+            session_title_separator: " | ".into(),
+        };
+        assert!(blank_app_id.validate().is_err());
+
+        let empty_separator = ZellijDiscovery {
+            terminal_app_ids: vec!["org.wezfurlong.wezterm".into()],
+            session_title_separator: String::new(),
+        };
+        assert!(empty_separator.validate().is_err());
     }
 }

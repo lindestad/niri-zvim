@@ -8,7 +8,7 @@ use std::{
 use serde::Serialize;
 
 use crate::{
-    config::{Config, config_path},
+    config::{Config, GHOSTTY_APP_ID, config_path},
     request_status,
     socket::socket_path,
     zellij::configured_plugin_path,
@@ -90,7 +90,7 @@ impl DoctorReport {
 
 pub fn doctor_report() -> DoctorReport {
     let mut checks = Vec::new();
-    check_config(&mut checks);
+    let uses_default_ghostty = check_config(&mut checks);
     check_version(
         &mut checks,
         "niri version",
@@ -128,23 +128,31 @@ pub fn doctor_report() -> DoctorReport {
         },
     );
     check_neovim_adapter(&mut checks);
-    check_version_prefix(
-        &mut checks,
-        "ghostty version",
-        "ghostty",
-        &["+version"],
-        GHOSTTY_VERSION_PREFIX,
-        |output| {
-            output
-                .lines()
-                .find_map(|line| line.trim().strip_prefix("- version: ").map(str::to_owned))
-        },
-    );
-    check_service(
-        &mut checks,
-        "ghostty service",
-        "app-com.mitchellh.ghostty.service",
-    );
+    if uses_default_ghostty {
+        check_version_prefix(
+            &mut checks,
+            "ghostty version",
+            "ghostty",
+            &["+version"],
+            GHOSTTY_VERSION_PREFIX,
+            |output| {
+                output
+                    .lines()
+                    .find_map(|line| line.trim().strip_prefix("- version: ").map(str::to_owned))
+            },
+        );
+        check_service(
+            &mut checks,
+            "ghostty service",
+            "app-com.mitchellh.ghostty.service",
+        );
+    } else {
+        warning(
+            &mut checks,
+            "terminal runtime",
+            "custom Zellij app IDs configured; verify their titles with `niri msg windows`",
+        );
+    }
     let healthy = checks.iter().all(|check| check.level != DoctorLevel::Fail);
     DoctorReport {
         version: env!("CARGO_PKG_VERSION").into(),
@@ -153,7 +161,7 @@ pub fn doctor_report() -> DoctorReport {
     }
 }
 
-fn check_config(checks: &mut Vec<DoctorCheck>) {
+fn check_config(checks: &mut Vec<DoctorCheck>) -> bool {
     let path = config_path();
     if !path.exists() {
         warning(
@@ -161,18 +169,30 @@ fn check_config(checks: &mut Vec<DoctorCheck>) {
             "config",
             format!("{} is missing; using built-in defaults", path.display()),
         );
-        return;
+        return true;
     }
     match Config::load().and_then(|config| {
         let mode = config.active_mode_name().to_owned();
-        config.active_mode().map(|_| mode)
+        config.active_mode()?;
+        let app_ids = config.zellij_discovery()?.terminal_app_ids.clone();
+        Ok((mode, app_ids))
     }) {
-        Ok(mode) => pass(
-            checks,
-            "config",
-            format!("{} selects mode {mode:?}", path.display()),
-        ),
-        Err(error) => fail(checks, "config", error.to_string()),
+        Ok((mode, app_ids)) => {
+            pass(
+                checks,
+                "config",
+                format!(
+                    "{} selects mode {mode:?} and Zellij app IDs [{}]",
+                    path.display(),
+                    app_ids.join(", ")
+                ),
+            );
+            app_ids.iter().any(|app_id| app_id == GHOSTTY_APP_ID)
+        }
+        Err(error) => {
+            fail(checks, "config", error.to_string());
+            true
+        }
     }
 }
 

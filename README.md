@@ -5,9 +5,9 @@ and Neovim splits.
 
 Version 0.2 is under development. Version 0.1 remains a developer preview for
 the stack it was built and tested on.
-Zellij discovery is currently specific to Ghostty, and the source installer is
-intended for people who are comfortable inspecting and maintaining a local
-checkout. See
+Zellij discovery now accepts configured terminal app IDs and title separators;
+Ghostty remains the tested default. The source installer is intended for
+people who are comfortable inspecting and maintaining a local checkout. See
 [support and compatibility](https://github.com/lindestad/niri-zvim/blob/main/docs/support.md)
 before installing.
 
@@ -67,10 +67,10 @@ For systemd-managed Ghostty, launch terminal windows with `ghostty +new-window`.
 Do not disable Ghostty's GTK single-instance mode.
 
 The Zellij bridge does not require a visible title bar. It reads the Wayland
-window title reported by niri. The supported setup expects Ghostty's app ID to
-be `com.mitchellh.ghostty` and the title to be either the Zellij session name
-or `<session> | <command>`. Hiding client-side decorations is fine; overriding
-the terminal title with a static value prevents discovery.
+app ID and window title reported by niri. The default setup expects Ghostty's
+app ID to be `com.mitchellh.ghostty` and the title to be either the Zellij
+session name or `<session> | <command>`. Hiding client-side decorations is
+fine; overriding the terminal title with a static value prevents discovery.
 
 ## Navigation modes
 
@@ -96,6 +96,10 @@ The installed config selects the `desktop` mode, matching this layout:
       "up": "focus-window-or-workspace-up",
       "right": "focus-column-or-monitor-right"
     }
+  },
+  "zellij": {
+    "terminal_app_ids": ["com.mitchellh.ghostty"],
+    "session_title_separator": " | "
   }
 }
 ```
@@ -103,6 +107,21 @@ The installed config selects the `desktop` mode, matching this layout:
 Restart `niri-zvim.service` after changing the active mode. Niri fallthrough
 actions are sent over the daemon's persistent Niri IPC socket; no `niri msg`
 process is launched on a keypress.
+
+## Zellij discovery
+
+`zellij.terminal_app_ids` is an exact allowlist of the Wayland app IDs that
+may contain Zellij. `zellij.session_title_separator` splits the window title at
+its first occurrence; the part before it is treated as the session name. A
+title without the separator is treated as the complete session name. In both
+cases a same-named Zellij session socket must exist before a bridge is opened.
+
+The defaults match Ghostty with Zellij-managed titles. Another terminal can be
+used when niri reports a stable app ID and its title preserves the Zellij
+session name. Inspect both with `niri msg --json windows`, change the two
+fields, and restart `niri-zvim.service`. Discovery configuration selects
+windows and derives session names; it does not launch or reconfigure the
+terminal.
 
 ## Status
 

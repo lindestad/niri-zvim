@@ -8,6 +8,8 @@
   and pending-navigation state.
 - Add a read-only doctor command for config, dependency versions, services,
   sockets, adapter files, and Zellij permission approval.
+- Make Zellij terminal app IDs and session-title separators configurable, with
+  an isolated live test that proves a non-default app ID drives discovery.
 
 ## 0.1.1
 

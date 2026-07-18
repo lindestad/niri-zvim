@@ -4,7 +4,7 @@
 
 cleanup_case() {
   local status="${1:-$?}"
-  local socket session pid_file pid workspace
+  local file socket session pid_file pid workspace
   set +e
   if ((status != 0)); then
     dump_live_state "case exited with status $status before cleanup" \
@@ -36,17 +36,26 @@ cleanup_case() {
   for pid_file in "${terminal_pid_files[@]}"; do
     rm -f "$pid_file"
   done
+  for file in "${case_files[@]}"; do
+    rm -f "$file"
+  done
   rm -f "$runtime_dir"/niri-zvim-live-"$tag"-*.kdl
 }
 
 cleanup_timed_out_case() {
-  local socket session workspace
+  local pid pid_file socket session workspace
   while IFS= read -r session; do
     [[ -n "$session" ]] || continue
     zellij kill-session "$session" >/dev/null 2>&1 || true
     zellij delete-session "$session" --force >/dev/null 2>&1 || true
   done < <(timeout 1s zellij list-sessions --short --no-formatting 2>/dev/null |
     grep "niri-zvim-live-$tag" || true)
+  for pid_file in "$runtime_dir"/niri-zvim-live-"$tag"-*.pid; do
+    [[ -s "$pid_file" ]] || continue
+    pid="$(<"$pid_file")"
+    [[ "$pid" =~ ^[1-9][0-9]*$ ]] || continue
+    kill "$pid" >/dev/null 2>&1 || true
+  done
   for _ in {1..60}; do
     shopt -s nullglob
     for socket in "$runtime_dir"/niri-zvim-live-"$tag"*.sock; do
@@ -81,6 +90,7 @@ begin_case() {
   zellij_sessions=()
   terminal_pid_files=()
   test_workspaces=()
+  case_files=()
   launched_window=""
   trap cleanup_case EXIT
   trap 'trap - EXIT INT TERM; cleanup_case 130; exit 130' INT

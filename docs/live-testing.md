@@ -41,6 +41,12 @@ cases prove both halves of optimistic navigation:
 Polling after every burst command would turn these into ordinary checkpoint
 tests and conceal the race they are intended to exercise.
 
+The discovery case runs a second daemon on an isolated socket with a custom
+terminal app ID. Ghostty reports that ID for disposable surfaces, while the
+normal daemon ignores them. The case verifies compositor metadata, bridge
+connection, and navigation through three Zellij panes, proving that discovery
+uses configuration rather than a hard-coded Ghostty identifier.
+
 ## Problems found while building the suite
 
 Niri's `tile_pos_in_workspace_view` is optional and may be absent even for a

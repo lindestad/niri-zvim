@@ -14,7 +14,7 @@ work, but have not been validated and should not be presented as supported.
 | Zellij | 0.44.3 |
 | Neovim | 0.12.4 |
 | Terminal for direct Neovim | Any terminal that delivers terminal-focus events to Neovim |
-| Terminal for Zellij | Ghostty GTK 1.3 with the standard Wayland app ID and Zellij-managed title |
+| Terminal for Zellij | Ghostty GTK 1.3 is tested; 0.2 accepts configured Wayland app IDs and title separators |
 | Rust source build | Rust 1.97.1 or newer with `wasm32-wasip1` available through rustup |
 | Service manager | systemd user services through the 0.1 installer |
 
@@ -40,18 +40,20 @@ installation.
 The daemon currently associates a niri window with a Zellij session by
 inference. All of the following must be true:
 
-- niri reports the window app ID as `com.mitchellh.ghostty`;
-- niri reports the Wayland window title as either `<session>` or
-  `<session> | <command>`;
+- niri reports a window app ID included in `zellij.terminal_app_ids`;
+- niri reports a Wayland window title containing the session name, optionally
+  followed by `zellij.session_title_separator` and terminal content;
 - a same-named Zellij session socket exists;
 - the session has one unambiguous connected terminal client;
 - Zellij session metadata is available for the supported fallback refresh
   path; and
 - the user has approved the plugin's requested Zellij permissions.
 
-The title is compositor metadata, not a requirement to show a decorated title
-bar. Ghostty's window decorations may remain hidden. A static custom terminal
-title, however, removes the session identity used by 0.1 discovery.
+The defaults are Ghostty's `com.mitchellh.ghostty` app ID and Zellij's ` | `
+title separator. These are compositor metadata, not requirements to show a
+decorated title bar. Ghostty's window decorations may remain hidden. A static
+custom terminal title, however, removes the session identity used by
+discovery.
 
 The plugin asks for `ReadApplicationState`, `ChangeApplicationState`,
 `ReadCliPipes`, and `ReadSessionEnvironmentVariables`. It hides itself after
@@ -85,11 +87,11 @@ opt-out interface is planned for 0.2.
 ## Known unsupported configurations
 
 - Vim rather than Neovim;
-- automatic Zellij discovery in terminals other than Ghostty;
+- terminals that do not expose a stable app ID and session-bearing title;
 - more than one niri window attached to the same Zellij session;
 - ambiguous multi-client Zellij sessions;
 - renamed Zellij sessions; and
 - non-systemd installation through the 0.1 installer.
 
-The 0.2 work is intended to replace terminal-specific inference with
-configurable discovery first, then an explicit window/session identity design.
+Configurable terminal discovery is complete for 0.2. The next identity work
+removes the one-window-per-session restriction.

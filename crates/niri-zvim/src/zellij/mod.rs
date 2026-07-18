@@ -7,7 +7,7 @@ use tokio::{
 };
 use tracing::warn;
 
-use crate::daemon::DaemonEvent;
+use crate::{config::ZellijDiscovery, daemon::DaemonEvent};
 
 use self::{bridge::run_bridge, metadata::session_socket_exists};
 
@@ -19,21 +19,31 @@ pub(crate) fn configured_plugin_path() -> std::path::PathBuf {
     metadata::plugin_path()
 }
 
-#[derive(Default)]
 pub struct BridgeManager {
+    discovery: ZellijDiscovery,
     sessions: BTreeSet<String>,
 }
 
 impl BridgeManager {
+    pub fn new(discovery: ZellijDiscovery) -> Self {
+        Self {
+            discovery,
+            sessions: BTreeSet::new(),
+        }
+    }
+
     pub fn observe(&mut self, windows: &[NiriWindow], events: &mpsc::Sender<DaemonEvent>) {
         for window in windows {
-            if window.app_id.as_deref() != Some("com.mitchellh.ghostty") {
+            let Some(app_id) = window.app_id.as_deref() else {
+                continue;
+            };
+            if !self.discovery.matches_app_id(app_id) {
                 continue;
             }
             let Some(title) = window.title.as_deref() else {
                 continue;
             };
-            let session = session_from_title(title);
+            let session = session_from_title(title, &self.discovery.session_title_separator);
             if !session_socket_exists(session) || !self.sessions.insert(session.to_owned()) {
                 continue;
             }
@@ -62,9 +72,9 @@ impl BridgeManager {
     }
 }
 
-fn session_from_title(title: &str) -> &str {
+fn session_from_title<'a>(title: &'a str, separator: &str) -> &'a str {
     title
-        .split_once(" | ")
+        .split_once(separator)
         .map_or(title, |(session, _command)| session)
 }
 
@@ -75,9 +85,23 @@ mod tests {
     #[test]
     fn extracts_session_from_zellij_terminal_title() {
         assert_eq!(
-            session_from_title("dev-session | nvim src/main.rs"),
+            session_from_title("dev-session | nvim src/main.rs", " | "),
             "dev-session"
         );
-        assert_eq!(session_from_title("dev-session"), "dev-session");
+        assert_eq!(session_from_title("dev-session", " | "), "dev-session");
+        assert_eq!(
+            session_from_title("dev-session :: nvim src/main.rs", " :: "),
+            "dev-session"
+        );
+    }
+
+    #[test]
+    fn terminal_app_ids_are_exact_and_configurable() {
+        let discovery = ZellijDiscovery {
+            terminal_app_ids: vec!["org.wezfurlong.wezterm".into()],
+            session_title_separator: " :: ".into(),
+        };
+        assert!(discovery.matches_app_id("org.wezfurlong.wezterm"));
+        assert!(!discovery.matches_app_id("com.mitchellh.ghostty"));
     }
 }

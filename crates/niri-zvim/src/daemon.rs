@@ -340,6 +340,7 @@ pub async fn run_daemon() -> anyhow::Result<()> {
     let config = Config::load()?;
     let active_mode = config.active_mode_name().to_owned();
     let niri_mode = config.active_mode()?;
+    let zellij_discovery = config.zellij_discovery()?.clone();
     info!(?niri_mode, "loaded Niri navigation mode");
     let path = socket_path()?;
     remove_stale_socket(&path)?;
@@ -357,7 +358,7 @@ pub async fn run_daemon() -> anyhow::Result<()> {
         active_mode,
         path.display().to_string(),
     );
-    let mut zellij = BridgeManager::default();
+    let mut zellij = BridgeManager::new(zellij_discovery);
     while let Some(event) = events_rx.recv().await {
         if let DaemonEvent::NiriSnapshot { windows, .. } = &event {
             zellij.observe(windows, &events_tx);

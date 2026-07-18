@@ -23,11 +23,11 @@ warning_pid_file="$runtime_dir/niri-zvim-live-$tag-warning.pid"
 source "$project_dir/scripts/test-output"
 
 if (($# > 1)); then
-  echo "usage: scripts/test-live [all|direct|tabs|zellij-one|zellij-three|nested|consumed|consumed-zellij|consumed-reflow|consumed-nvim|workspaces]" >&2
+  echo "usage: scripts/test-live [all|direct|tabs|zellij-one|zellij-three|discovery|nested|consumed|consumed-zellij|consumed-reflow|consumed-nvim|workspaces]" >&2
   exit 2
 fi
 case "$selected_case" in
-  all | direct | tabs | zellij-one | zellij-three | nested | consumed | consumed-zellij | consumed-reflow | consumed-nvim | workspaces) ;;
+  all | direct | tabs | zellij-one | zellij-three | discovery | nested | consumed | consumed-zellij | consumed-reflow | consumed-nvim | workspaces) ;;
   *)
     echo "unknown live test case: $selected_case" >&2
     exit 2
@@ -102,6 +102,8 @@ source "$live_tests_dir/tabs.sh"
 source "$live_tests_dir/zellij-one.sh"
 # shellcheck source=scripts/live-tests/zellij-three.sh
 source "$live_tests_dir/zellij-three.sh"
+# shellcheck source=scripts/live-tests/discovery.sh
+source "$live_tests_dir/discovery.sh"
 # shellcheck source=scripts/live-tests/nested.sh
 source "$live_tests_dir/nested.sh"
 # shellcheck source=scripts/live-tests/consumed-zellij.sh
@@ -133,7 +135,8 @@ trap 'exit 143' TERM
 while read -r _ _ function; do
   export -f "${function?}"
 done < <(declare -F)
-export project_dir runtime_dir ghostty_config terminal_fixture nvim_fixture tag zellij_cache_home
+export project_dir runtime_dir daemon_config ghostty_config terminal_fixture nvim_fixture tag
+export zellij_cache_home zellij_plugin
 export operation_timeout_seconds case_state_file case_debug_file case_interruption_file
 export original_window original_windows original_workspaces
 export test_cpu_count test_start_cpu_strain
@@ -186,6 +189,9 @@ if [[ "$selected_case" == all || "$selected_case" == zellij-one ]]; then
 fi
 if [[ "$selected_case" == all || "$selected_case" == zellij-three ]]; then
   run_case "three-pane Zellij traversal" test_zellij_three_panes
+fi
+if [[ "$selected_case" == all || "$selected_case" == discovery ]]; then
+  run_case "configured terminal discovery" test_configured_terminal_discovery
 fi
 if [[ "$selected_case" == all || "$selected_case" == nested ]]; then
   run_case "nested Neovim in Zellij traversal" test_nested_nvim_in_zellij

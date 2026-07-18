@@ -13,5 +13,9 @@
       "up": "focus-window-or-workspace-up",
       "right": "focus-column-or-monitor-right"
     }
+  },
+  "zellij": {
+    "terminal_app_ids": ["com.mitchellh.ghostty"],
+    "session_title_separator": " | "
   }
 }
