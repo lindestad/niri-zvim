@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.0 (unreleased)
+
+- Development in progress.
+
 ## 0.1.1
 
 - Treat adapter focus outside a published topology as an edge instead of

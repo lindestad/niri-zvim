@@ -3,7 +3,8 @@
 State-synchronized directional navigation across niri windows, Zellij panes,
 and Neovim splits.
 
-Version 0.1 is a developer preview for the stack it was built and tested on.
+Version 0.2 is under development. Version 0.1 remains a developer preview for
+the stack it was built and tested on.
 Zellij discovery is currently specific to Ghostty, and the source installer is
 intended for people who are comfortable inspecting and maintaining a local
 checkout. See

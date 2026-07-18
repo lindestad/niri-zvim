@@ -1372,7 +1372,7 @@ dependencies = [
 
 [[package]]
 name = "niri-zvim"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "criterion",
@@ -1388,7 +1388,7 @@ dependencies = [
 
 [[package]]
 name = "niri-zvim-core"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "criterion",
  "serde",
@@ -1398,7 +1398,7 @@ dependencies = [
 
 [[package]]
 name = "niri-zvim-zellij"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "niri-zvim-core",
  "serde_json",

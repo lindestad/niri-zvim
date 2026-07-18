@@ -2,10 +2,10 @@
 
 ## Release status
 
-Version 0.1 is a developer preview of the current architecture, not yet a
-general terminal-navigation package. It is supported as a complete integration
-on the stack below. Other combinations may work, but have not been validated
-and should not be presented as supported.
+Version 0.2 is under development. Version 0.1 is a developer preview of the
+current architecture, not yet a general terminal-navigation package. It is
+supported as a complete integration on the stack below. Other combinations may
+work, but have not been validated and should not be presented as supported.
 
 | Component | 0.1 support |
 | --- | --- |
