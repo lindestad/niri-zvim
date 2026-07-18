@@ -5,7 +5,7 @@ use std::{
     time::Duration,
 };
 
-use niri_zvim_core::{AdapterMessage, DaemonMessage, Direction};
+use niri_zvim_core::{AdapterMessage, DaemonMessage, Direction, ProtocolMessage, adapter_prelude};
 
 #[test]
 fn nvim_publishes_topology_and_drains_queued_navigation() {
@@ -36,9 +36,9 @@ fn nvim_publishes_topology_and_drains_queued_navigation() {
     stream
         .set_read_timeout(Some(Duration::from_secs(5)))
         .unwrap();
-    let mut magic = [0];
-    stream.read_exact(&mut magic).unwrap();
-    assert_eq!(magic[0], niri_zvim::adapter_magic());
+    let mut prelude = [0; 2];
+    stream.read_exact(&mut prelude).unwrap();
+    assert_eq!(prelude, adapter_prelude());
     let mut writer = stream.try_clone().unwrap();
     let mut reader = BufReader::new(stream);
 
@@ -74,7 +74,7 @@ fn nvim_publishes_topology_and_drains_queued_navigation() {
     ];
     let encoded = commands
         .iter()
-        .map(|command| serde_json::to_string(command).unwrap())
+        .map(|command| serde_json::to_string(&ProtocolMessage::new(command)).unwrap())
         .collect::<Vec<_>>()
         .join("\n");
     writeln!(writer, "{encoded}").unwrap();
@@ -131,9 +131,9 @@ fn nvim_reports_a_focused_float_outside_normal_window_topology() {
     stream
         .set_read_timeout(Some(Duration::from_secs(5)))
         .unwrap();
-    let mut magic = [0];
-    stream.read_exact(&mut magic).unwrap();
-    assert_eq!(magic[0], niri_zvim::adapter_magic());
+    let mut prelude = [0; 2];
+    stream.read_exact(&mut prelude).unwrap();
+    assert_eq!(prelude, adapter_prelude());
     let mut reader = BufReader::new(stream);
 
     loop {
@@ -157,6 +157,8 @@ fn read_message(reader: &mut BufReader<std::os::unix::net::UnixStream>) -> Adapt
     if line.is_empty() {
         panic!("Neovim adapter disconnected");
     }
-    serde_json::from_str(&line)
+    serde_json::from_str::<ProtocolMessage<AdapterMessage>>(&line)
         .unwrap_or_else(|error| panic!("invalid adapter message {line:?}: {error}"))
+        .into_current()
+        .unwrap()
 }

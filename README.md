@@ -12,10 +12,10 @@ checkout. See
 before installing.
 
 niri-zvimd keeps a live graph of focus and topology. Neovim and a background
-Zellij plugin push changes to it; the niri-zvim command sends one-byte
-navigation requests from niri key bindings. A request is routed directly to
-the deepest layer that has a neighbor in that direction, otherwise it falls
-through to niri.
+Zellij plugin push changes to it; the niri-zvim command sends a three-byte,
+versioned navigation request from niri key bindings. A request is routed
+directly to the deepest layer that has a neighbor in that direction, otherwise
+it falls through to niri.
 
 Focus changes are applied optimistically. Repeated requests route against the
 predicted graph without waiting for acknowledgements; authoritative snapshots
@@ -126,6 +126,9 @@ For individual Rust checks, run:
     cargo clippy -p niri-zvim-zellij --target wasm32-wasip1 -- -D warnings
 
 The live part launches disposable Ghostty windows with an isolated test config.
+Immediately before it takes desktop control, it shows a small two-second
+Ghostty warning and restores the previously focused window when the warning
+closes.
 Disposable Zellij sessions use an isolated permission cache that grants the
 repository's plugin only the four permissions documented above; the user's
 Zellij permission cache is not read or changed. Their session metadata remains

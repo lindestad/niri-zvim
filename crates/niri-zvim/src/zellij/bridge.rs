@@ -4,7 +4,7 @@ use std::sync::{
 };
 
 use anyhow::Context;
-use niri_zvim_core::{AdapterMessage, DaemonMessage};
+use niri_zvim_core::{AdapterMessage, DaemonMessage, ProtocolMessage};
 use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
     process::Command,
@@ -124,10 +124,10 @@ pub(super) async fn run_bridge(
         refresh_rx,
     ));
 
-    let bind = serde_json::to_vec(&DaemonMessage::BindNiriWindow {
+    let bind = serde_json::to_vec(&ProtocolMessage::new(DaemonMessage::BindNiriWindow {
         window_id,
         session: session.to_owned(),
-    })?;
+    }))?;
     stdin.write_all(&bind).await?;
     stdin.write_u8(b'\n').await?;
     stdin.flush().await?;
@@ -140,7 +140,7 @@ pub(super) async fn run_bridge(
                 DaemonMessage::Navigate { sequence, .. } => Some(*sequence),
                 DaemonMessage::BindNiriWindow { .. } => None,
             };
-            let Ok(mut encoded) = serde_json::to_vec(&message) else {
+            let Ok(mut encoded) = serde_json::to_vec(&ProtocolMessage::new(message)) else {
                 continue;
             };
             encoded.push(b'\n');
@@ -155,7 +155,11 @@ pub(super) async fn run_bridge(
 
     let mut lines = BufReader::new(stdout).lines();
     while let Some(line) = lines.next_line().await? {
-        match serde_json::from_str::<AdapterMessage>(&line) {
+        match serde_json::from_str::<ProtocolMessage<AdapterMessage>>(&line).and_then(|message| {
+            message
+                .into_current()
+                .map_err(|error| serde_json::Error::io(std::io::Error::other(error)))
+        }) {
             Ok(AdapterMessage::ZellijSnapshot { mut state }) => {
                 if let Some(sequence) = state.acknowledged_sequence {
                     let _ = refresh_tx.send(RefreshEvent::Acknowledge(sequence));

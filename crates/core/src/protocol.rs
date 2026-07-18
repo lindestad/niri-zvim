@@ -1,6 +1,11 @@
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Deserializer, Serialize};
+use thiserror::Error;
+
+pub const PROTOCOL_VERSION: u8 = 1;
+pub const CONTROL_MAGIC: u8 = 0x7e;
+pub const ADAPTER_MAGIC: u8 = 0x7f;
 
 pub type Revision = u64;
 pub type PaneId = u32;
@@ -18,7 +23,7 @@ pub enum Direction {
 impl Direction {
     pub const ALL: [Self; 4] = [Self::Left, Self::Down, Self::Up, Self::Right];
 
-    pub const fn wire_byte(self) -> u8 {
+    pub const fn control_opcode(self) -> u8 {
         match self {
             Self::Left => 1,
             Self::Down => 2,
@@ -27,7 +32,7 @@ impl Direction {
         }
     }
 
-    pub const fn from_wire_byte(byte: u8) -> Option<Self> {
+    pub const fn from_control_opcode(byte: u8) -> Option<Self> {
         match byte {
             1 => Some(Self::Left),
             2 => Some(Self::Down),
@@ -36,6 +41,48 @@ impl Direction {
             _ => None,
         }
     }
+
+    pub const fn control_frame(self) -> [u8; 3] {
+        [CONTROL_MAGIC, PROTOCOL_VERSION, self.control_opcode()]
+    }
+}
+
+pub const fn adapter_prelude() -> [u8; 2] {
+    [ADAPTER_MAGIC, PROTOCOL_VERSION]
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProtocolMessage<T> {
+    pub protocol_version: u8,
+    pub message: T,
+}
+
+impl<T> ProtocolMessage<T> {
+    pub const fn new(message: T) -> Self {
+        Self {
+            protocol_version: PROTOCOL_VERSION,
+            message,
+        }
+    }
+
+    pub fn into_current(self) -> Result<T, ProtocolVersionError> {
+        if self.protocol_version == PROTOCOL_VERSION {
+            Ok(self.message)
+        } else {
+            Err(ProtocolVersionError {
+                received: self.protocol_version,
+                supported: PROTOCOL_VERSION,
+            })
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+#[error("protocol version {received} is not supported; expected {supported}")]
+pub struct ProtocolVersionError {
+    pub received: u8,
+    pub supported: u8,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -192,6 +239,36 @@ mod tests {
         };
         assert_field_is_required::<NvimInstance>(nvim.clone(), "terminal_focused");
         assert_field_is_required::<NvimInstance>(nvim, "acknowledged_sequence");
+    }
+
+    #[test]
+    fn control_and_adapter_connections_are_explicitly_versioned() {
+        assert_eq!(Direction::Left.control_frame(), [0x7e, 1, 1]);
+        assert_eq!(adapter_prelude(), [0x7f, 1]);
+        assert_eq!(Direction::from_control_opcode(4), Some(Direction::Right));
+        assert_eq!(Direction::from_control_opcode(CONTROL_MAGIC), None);
+    }
+
+    #[test]
+    fn nested_protocol_messages_reject_other_versions() {
+        let encoded = serde_json::to_string(&ProtocolMessage::new(DaemonMessage::Navigate {
+            sequence: 4,
+            direction: Direction::Up,
+        }))
+        .unwrap();
+        assert_eq!(
+            encoded,
+            r#"{"protocol_version":1,"message":{"type":"navigate","sequence":4,"direction":"up"}}"#
+        );
+
+        let stale = ProtocolMessage {
+            protocol_version: 0,
+            message: DaemonMessage::Navigate {
+                sequence: 4,
+                direction: Direction::Up,
+            },
+        };
+        assert_eq!(stale.into_current().unwrap_err().received, 0);
     }
 
     fn assert_field_is_required<T>(state: T, field: &str)

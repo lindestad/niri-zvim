@@ -4,7 +4,7 @@ The daemon owns the navigation graph. Adapters publish topology; they do not
 need to be queried during normal key handling.
 
     niri event stream -----------------+
-    Zellij plugin <-> persistent pipe -+-> niri-zvimd <- one-byte nav client
+    Zellij plugin <-> persistent pipe -+-> niri-zvimd <- versioned nav client
     Neovim Lua <-> Unix socket --------+        |
                                                +-> exactly one executor
 
@@ -48,10 +48,16 @@ adapter snapshots are authoritative observations; later pending predictions
 are replayed on top of them.
 
 The keypress path performs no process discovery and invokes no Zellij or
-Neovim command-line client. It is one short Unix-socket write followed by an
-in-memory graph transition. The daemon keeps a persistent Niri action socket,
+Neovim command-line client. It is one three-byte Unix-socket write (control
+magic, protocol version, direction) followed by an in-memory graph transition.
+The daemon keeps a persistent Niri action socket,
 a persistent pipe per observed Zellij session, and a persistent socket per
 Neovim instance.
+
+Native control connections and adapter connections carry an exact protocol
+version in their binary prelude. Persistent Neovim and Zellij JSON messages are
+also nested in a versioned envelope. The daemon and adapters reject mismatched
+versions; 0.2 does not reinterpret the unversioned 0.1 wire format.
 
 Executor reconciliation is deliberately outside the dispatch path. Niri uses
 separate persistent action and snapshot sockets, coalescing snapshot requests
@@ -88,7 +94,7 @@ no neighbor; they do not alter nested routing.
 
 The opt-in `scripts/test-live` harness launches disposable Ghostty surfaces for
 direct Neovim and Zellij. Each scenario records the initial nested focus,
-sends the normal one-byte navigation client message, queries authoritative
+sends the normal versioned navigation client message, queries authoritative
 Neovim RPC or Zellij JSON state, and compares the resulting nested and Niri
 focus with the expected transition. Burst scenarios also send complete direct,
 Zellij, and nested paths without waiting between commands, then verify every

@@ -2,7 +2,8 @@
 
 ## 0.2.0 (unreleased)
 
-- Development in progress.
+- Version the navigation and adapter wire protocols and reject mismatched
+  clients instead of interpreting stale message formats.
 
 ## 0.1.1
 

@@ -14,15 +14,15 @@ fn socket_dispatch(c: &mut Criterion) {
     let listener = UnixListener::bind(&path).unwrap();
     thread::spawn(move || {
         for mut stream in listener.incoming().flatten() {
-            let mut direction = [0];
-            stream.read_exact(&mut direction).unwrap();
+            let mut request = [0; 3];
+            stream.read_exact(&mut request).unwrap();
         }
     });
 
-    c.bench_function("connect and send navigation byte", |b| {
+    c.bench_function("connect and send navigation frame", |b| {
         b.iter(|| {
             let mut stream = UnixStream::connect(&path).unwrap();
-            stream.write_all(&[Direction::Right.wire_byte()]).unwrap();
+            stream.write_all(&Direction::Right.control_frame()).unwrap();
         });
     });
 

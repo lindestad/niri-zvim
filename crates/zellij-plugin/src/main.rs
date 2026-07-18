@@ -1,8 +1,8 @@
 use std::collections::BTreeMap;
 
 use niri_zvim_core::{
-    AdapterMessage, DaemonMessage, NeighborMap, Rect, ZellijClient, ZellijClientState,
-    directional_neighbors,
+    AdapterMessage, DaemonMessage, NeighborMap, ProtocolMessage, Rect, ZellijClient,
+    ZellijClientState, directional_neighbors,
 };
 use zellij_tile::prelude::{
     Direction as ZellijDirection, Event, EventType, PaneManifest, PermissionStatus, PermissionType,
@@ -120,7 +120,7 @@ impl ZellijPlugin for Plugin {
                 let line: String = self.input.drain(..=end).collect();
                 self.handle_daemon_message(line.trim());
             }
-            if serde_json::from_str::<DaemonMessage>(self.input.trim()).is_ok() {
+            if serde_json::from_str::<ProtocolMessage<DaemonMessage>>(self.input.trim()).is_ok() {
                 let line = std::mem::take(&mut self.input);
                 self.handle_daemon_message(line.trim());
             }
@@ -133,7 +133,10 @@ impl ZellijPlugin for Plugin {
 
 impl Plugin {
     fn handle_daemon_message(&mut self, line: &str) {
-        let Ok(message) = serde_json::from_str(line) else {
+        let Ok(message) = serde_json::from_str::<ProtocolMessage<DaemonMessage>>(line) else {
+            return;
+        };
+        let Ok(message) = message.into_current() else {
             return;
         };
         match message {
@@ -224,7 +227,7 @@ impl Plugin {
             };
             pane_neighbors(&session_info.panes, tab, focused_pane)
         };
-        let message = AdapterMessage::ZellijSnapshot {
+        let message = ProtocolMessage::new(AdapterMessage::ZellijSnapshot {
             state: ZellijClientState {
                 client: ZellijClient {
                     session,
@@ -236,7 +239,7 @@ impl Plugin {
                 focused_pane,
                 pane_neighbors,
             },
-        };
+        });
         if let Ok(mut encoded) = serde_json::to_string(&message) {
             encoded.push('\n');
             cli_pipe_output(&pipe_id, &encoded);

@@ -2,10 +2,6 @@ use std::{ffi::OsString, path::PathBuf};
 
 use anyhow::Context;
 
-pub const fn adapter_magic() -> u8 {
-    0x7f
-}
-
 pub fn socket_path() -> anyhow::Result<PathBuf> {
     resolve_socket_path(
         std::env::var_os("NIRI_ZVIM_SOCKET"),

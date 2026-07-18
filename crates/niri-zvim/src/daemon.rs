@@ -10,8 +10,8 @@ use std::{
 
 use anyhow::Context;
 use niri_zvim_core::{
-    AdapterMessage, DaemonMessage, Direction, NavigationAction, NavigationGraph, NiriWindow,
-    ZellijClient,
+    ADAPTER_MAGIC, AdapterMessage, CONTROL_MAGIC, DaemonMessage, Direction, NavigationAction,
+    NavigationGraph, NiriWindow, PROTOCOL_VERSION, ProtocolMessage, ZellijClient,
 };
 use tokio::{
     io::{AsyncBufRead, AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader},
@@ -24,7 +24,7 @@ use tracing::{debug, info, warn};
 use crate::{
     config::Config,
     niri::{NiriExecutor, start_event_thread},
-    socket::{adapter_magic, socket_path},
+    socket::socket_path,
     zellij::BridgeManager,
 };
 
@@ -344,17 +344,29 @@ async fn handle_connection(
     let first = timeout(HANDSHAKE_TIMEOUT, stream.read_u8())
         .await
         .context("connection handshake timed out")??;
-    if let Some(direction) = Direction::from_wire_byte(first) {
+    let version = timeout(HANDSHAKE_TIMEOUT, stream.read_u8())
+        .await
+        .context("connection protocol version timed out")??;
+    anyhow::ensure!(
+        version == PROTOCOL_VERSION,
+        "protocol version {version} is not supported; expected {PROTOCOL_VERSION}"
+    );
+    if first == CONTROL_MAGIC {
+        let opcode = timeout(HANDSHAKE_TIMEOUT, stream.read_u8())
+            .await
+            .context("control request timed out")??;
+        let direction = Direction::from_control_opcode(opcode)
+            .with_context(|| format!("invalid control opcode {opcode}"))?;
         events.send(DaemonEvent::Navigate(direction)).await?;
         return Ok(());
     }
-    anyhow::ensure!(first == adapter_magic(), "invalid protocol byte {first}");
+    anyhow::ensure!(first == ADAPTER_MAGIC, "invalid protocol byte {first}");
 
     let (reader, mut writer) = stream.into_split();
     let (sink, mut outgoing) = mpsc::channel(ADAPTER_OUTGOING_CAPACITY);
     let writer_task = tokio::spawn(async move {
         while let Some(message) = outgoing.recv().await {
-            let Ok(mut encoded) = serde_json::to_vec(&message) else {
+            let Ok(mut encoded) = serde_json::to_vec(&ProtocolMessage::new(message)) else {
                 continue;
             };
             encoded.push(b'\n');
@@ -380,7 +392,8 @@ where
 {
     let mut frame = Vec::new();
     while read_bounded_line(&mut reader, &mut frame).await? {
-        let message = serde_json::from_slice(&frame)?;
+        let message =
+            serde_json::from_slice::<ProtocolMessage<AdapterMessage>>(&frame)?.into_current()?;
         events
             .send(DaemonEvent::Adapter {
                 message,
@@ -417,7 +430,14 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::{os::unix::fs::PermissionsExt, os::unix::net::UnixListener as StdUnixListener};
+    use std::{
+        io::Write,
+        net::Shutdown,
+        os::unix::{
+            fs::PermissionsExt,
+            net::{UnixListener as StdUnixListener, UnixStream as StdUnixStream},
+        },
+    };
 
     use tokio::io::BufReader;
 
@@ -435,6 +455,87 @@ mod tests {
             fs::metadata(path).unwrap().permissions().mode() & 0o777,
             0o600
         );
+    }
+
+    #[tokio::test]
+    async fn versioned_control_frame_routes_navigation() {
+        let (mut client, server) = StdUnixStream::pair().unwrap();
+        server.set_nonblocking(true).unwrap();
+        let server = UnixStream::from_std(server).unwrap();
+        let (events, mut received) = mpsc::channel(1);
+
+        client.write_all(&Direction::Down.control_frame()).unwrap();
+        handle_connection(server, events).await.unwrap();
+
+        assert!(matches!(
+            received.recv().await,
+            Some(DaemonEvent::Navigate(Direction::Down))
+        ));
+    }
+
+    #[tokio::test]
+    async fn legacy_and_mismatched_connections_are_rejected() {
+        for frame in [
+            vec![Direction::Left.control_opcode()],
+            vec![CONTROL_MAGIC, PROTOCOL_VERSION.wrapping_add(1), 1],
+            vec![ADAPTER_MAGIC, PROTOCOL_VERSION.wrapping_add(1)],
+        ] {
+            let (mut client, server) = StdUnixStream::pair().unwrap();
+            server.set_nonblocking(true).unwrap();
+            let server = UnixStream::from_std(server).unwrap();
+            let (events, mut received) = mpsc::channel(1);
+            client.write_all(&frame).unwrap();
+            client.shutdown(Shutdown::Write).unwrap();
+
+            assert!(handle_connection(server, events).await.is_err());
+            assert!(received.try_recv().is_err());
+        }
+    }
+
+    #[tokio::test]
+    async fn daemon_wraps_outgoing_adapter_messages() {
+        let (mut client, server) = UnixStream::pair().unwrap();
+        let (events, mut received) = mpsc::channel(1);
+        let connection = tokio::spawn(handle_connection(server, events));
+        let mut frame = serde_json::to_vec(&ProtocolMessage::new(AdapterMessage::NvimClosed {
+            id: "test".into(),
+        }))
+        .unwrap();
+        frame.push(b'\n');
+
+        client
+            .write_all(&niri_zvim_core::adapter_prelude())
+            .await
+            .unwrap();
+        client.write_all(&frame).await.unwrap();
+        let sink = match received.recv().await {
+            Some(DaemonEvent::Adapter { sink, .. }) => sink,
+            _ => panic!("adapter event was not received"),
+        };
+        sink.send(DaemonMessage::Navigate {
+            sequence: 9,
+            direction: Direction::Right,
+        })
+        .await
+        .unwrap();
+
+        let mut reader = BufReader::new(client);
+        let mut line = String::new();
+        reader.read_line(&mut line).await.unwrap();
+        let message = serde_json::from_str::<ProtocolMessage<DaemonMessage>>(&line)
+            .unwrap()
+            .into_current()
+            .unwrap();
+        assert_eq!(
+            message,
+            DaemonMessage::Navigate {
+                sequence: 9,
+                direction: Direction::Right,
+            }
+        );
+
+        drop(reader);
+        connection.await.unwrap().unwrap();
     }
 
     #[tokio::test]

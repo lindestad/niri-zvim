@@ -13,6 +13,7 @@ local terminal_focused = true
 local navigation_queue = {}
 local navigation_pending = false
 local acknowledged_sequence
+local protocol_version = 1
 
 local function socket_path()
   if vim.env.NIRI_ZVIM_SOCKET and vim.env.NIRI_ZVIM_SOCKET ~= "" then
@@ -119,7 +120,10 @@ end
 
 local function write(message)
   if pipe and pipe:is_active() then
-    pipe:write(vim.json.encode(message) .. "\n")
+    pipe:write(vim.json.encode({
+      protocol_version = protocol_version,
+      message = message,
+    }) .. "\n")
   end
 end
 
@@ -190,8 +194,11 @@ local function consume(data)
     local line = input:sub(1, newline - 1)
     input = input:sub(newline + 1)
     local ok, message = pcall(vim.json.decode, line)
-    if ok and message.type == "navigate" then
-      queue_navigation(message.sequence, message.direction)
+    if ok
+        and message.protocol_version == protocol_version
+        and type(message.message) == "table"
+        and message.message.type == "navigate" then
+      queue_navigation(message.message.sequence, message.message.direction)
     end
   end
 end
@@ -224,7 +231,7 @@ function M.connect()
       reconnect()
       return
     end
-    pipe:write(string.char(0x7f))
+    pipe:write(string.char(0x7f, protocol_version))
     pipe:read_start(function(read_error, data)
       if read_error or not data then
         if not pipe:is_closing() then
