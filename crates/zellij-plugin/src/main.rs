@@ -273,11 +273,11 @@ impl Plugin {
             .find(|pane| !pane.is_plugin && pane.id == focused_pane)?
             .is_floating;
         let key = (tab, floating);
-        if !self.neighbor_cache.contains_key(&key) {
+        Some(
             self.neighbor_cache
-                .insert(key, pane_neighbors_for_layer(manifest, tab, floating));
-        }
-        self.neighbor_cache.get(&key)
+                .entry(key)
+                .or_insert_with(|| pane_neighbors_for_layer(manifest, tab, floating)),
+        )
     }
 }
 

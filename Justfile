@@ -7,6 +7,10 @@ default:
 install:
     ./scripts/install
 
+# Run checks that do not control the desktop.
+check:
+    ./scripts/check
+
 # Run all latency benchmarks.
 bench:
     ./scripts/bench

@@ -101,18 +101,23 @@ process is launched on a keypress.
 
 ## Development
 
+Run formatting, unit and integration tests, native and WASM Clippy, ShellCheck,
+and crate packaging without controlling the desktop with:
+
+    just check
+
 Run the complete test suite, including the live desktop tests, and the latency
-benchmarks with:
+benchmarks separately with:
 
     just test
     just bench
     just bench-live
 
 The test command checks the required tool versions and active user services.
-For individual development checks, run:
+For individual Rust checks, run:
 
     cargo test
-    cargo clippy --workspace --all-targets --exclude niri-zvim-zellij -- -D warnings
+    cargo clippy --workspace --all-targets --all-features --exclude niri-zvim-zellij -- -D warnings
     cargo clippy -p niri-zvim-zellij --target wasm32-wasip1 -- -D warnings
 
 The live part launches disposable Ghostty windows with an isolated test config.

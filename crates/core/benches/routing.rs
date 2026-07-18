@@ -6,6 +6,8 @@ use niri_zvim_core::{
     ZellijClient, ZellijClientState, directional_neighbors,
 };
 
+type GraphBuilder = fn(usize) -> NavigationGraph;
+
 fn chain_neighbors(index: usize, count: usize) -> NeighborMap<u64> {
     NeighborMap {
         left: index.checked_sub(1).map(|value| value as u64),
@@ -70,7 +72,7 @@ fn nested_nvim_graph(count: usize) -> NavigationGraph {
 }
 
 fn routing(c: &mut Criterion) {
-    let builders: [(&str, fn(usize) -> NavigationGraph); 3] = [
+    let builders: [(&str, GraphBuilder); 3] = [
         ("niri", niri_graph),
         ("direct-neovim", direct_nvim_graph),
         ("nested-neovim", nested_nvim_graph),

@@ -167,7 +167,7 @@ mod tests {
 
         assert_eq!(graph[&4].up, None);
         assert_eq!(graph[&4].down, None);
-        assert!(matches!(graph[&4].left, Some(1 | 2 | 3)));
+        assert!(matches!(graph[&4].left, Some(1..=3)));
         assert_eq!(graph[&1].right, Some(4));
         assert_eq!(graph[&2].right, Some(4));
         assert_eq!(graph[&3].right, Some(4));
