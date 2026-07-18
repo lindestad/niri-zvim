@@ -14,6 +14,8 @@
   client-targeted plugin messages and bidirectional live traversal.
 - Make Neovim integration explicitly opt-in through a validated, idempotent
   `setup()` interface with socket/retry options and complete runtime teardown.
+- Add `config check` and `config show` commands for validating and inspecting
+  the complete effective configuration.
 
 ## 0.1.1
 

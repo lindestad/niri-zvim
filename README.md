@@ -126,9 +126,14 @@ The installed config selects the `desktop` mode, matching this layout:
 }
 ```
 
-Restart `niri-zvim.service` after changing the active mode. Niri fallthrough
-actions are sent over the daemon's persistent Niri IPC socket; no `niri msg`
-process is launched on a keypress.
+Inspect or validate the effective configuration without starting the daemon:
+
+    niri-zvim config check
+    niri-zvim config show
+
+Both commands accept `--json`. Niri fallthrough actions are sent over the
+daemon's persistent Niri IPC socket; no `niri msg` process is launched on a
+keypress.
 
 ## Zellij discovery
 

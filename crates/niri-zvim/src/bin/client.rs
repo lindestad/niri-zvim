@@ -1,8 +1,9 @@
 use std::{io::Write, os::unix::net::UnixStream};
 
 use anyhow::Context;
-use niri_zvim::{doctor_report, request_status, socket_path};
+use niri_zvim::{Config, config_path, doctor_report, request_status, socket_path};
 use niri_zvim_core::{Direction, NvimParent};
+use serde::Serialize;
 
 fn main() -> anyhow::Result<()> {
     let arguments: Vec<_> = std::env::args().skip(1).collect();
@@ -20,6 +21,10 @@ fn main() -> anyhow::Result<()> {
         ["status", "--json"] => print_status(true),
         ["doctor"] => print_doctor(false),
         ["doctor", "--json"] => print_doctor(true),
+        ["config", "check"] => check_config(false),
+        ["config", "check", "--json"] => check_config(true),
+        ["config", "show"] => show_config(false),
+        ["config", "show", "--json"] => show_config(true),
         ["-V" | "--version"] => {
             println!("niri-zvim {}", env!("CARGO_PKG_VERSION"));
             Ok(())
@@ -100,6 +105,64 @@ fn print_doctor(json: bool) -> anyhow::Result<()> {
     Ok(())
 }
 
+#[derive(Serialize)]
+struct ConfigSummary<'a> {
+    valid: bool,
+    path: &'a std::path::Path,
+    source: &'static str,
+    active_mode: &'a str,
+}
+
+#[derive(Serialize)]
+struct ConfigDisplay<'a> {
+    path: &'a std::path::Path,
+    source: &'static str,
+    config: &'a Config,
+}
+
+fn load_config() -> anyhow::Result<(std::path::PathBuf, &'static str, Config)> {
+    let path = config_path();
+    let source = if path.is_file() { "file" } else { "defaults" };
+    let config = Config::load_validated()?;
+    Ok((path, source, config))
+}
+
+fn check_config(json: bool) -> anyhow::Result<()> {
+    let (path, source, config) = load_config()?;
+    let summary = ConfigSummary {
+        valid: true,
+        path: &path,
+        source,
+        active_mode: config.active_mode_name(),
+    };
+    if json {
+        println!("{}", serde_json::to_string_pretty(&summary)?);
+    } else {
+        println!("valid: {} ({source})", path.display());
+        println!("active mode: {}", config.active_mode_name());
+    }
+    Ok(())
+}
+
+fn show_config(json: bool) -> anyhow::Result<()> {
+    let (path, source, config) = load_config()?;
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&ConfigDisplay {
+                path: &path,
+                source,
+                config: &config,
+            })?
+        );
+    } else {
+        println!("path: {}", path.display());
+        println!("source: {source}");
+        println!("{}", serde_json::to_string_pretty(&config)?);
+    }
+    Ok(())
+}
+
 fn optional_id(id: Option<u64>) -> String {
     id.map_or_else(|| "none".into(), |id| id.to_string())
 }
@@ -126,5 +189,5 @@ fn parent_name(parent: &NvimParent) -> String {
 }
 
 fn usage() -> &'static str {
-    "usage: niri-zvim <left|down|up|right|status [--json]|doctor [--json]>"
+    "usage: niri-zvim <left|down|up|right|status [--json]|doctor [--json]|config <check|show> [--json]>"
 }

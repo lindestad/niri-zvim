@@ -171,9 +171,8 @@ fn check_config(checks: &mut Vec<DoctorCheck>) -> bool {
         );
         return true;
     }
-    match Config::load().and_then(|config| {
+    match Config::load_validated().and_then(|config| {
         let mode = config.active_mode_name().to_owned();
-        config.active_mode()?;
         let app_ids = config.zellij_discovery()?.terminal_app_ids.clone();
         Ok((mode, app_ids))
     }) {

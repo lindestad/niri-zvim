@@ -1,4 +1,5 @@
 use std::{
+    fs,
     io::{Read, Write},
     os::unix::net::UnixListener,
     process::Command,
@@ -86,4 +87,83 @@ fn status_fixture() -> DaemonStatus {
         zellij: Vec::new(),
         nvim: Vec::new(),
     }
+}
+
+#[test]
+fn config_check_and_show_report_the_resolved_file() {
+    let temp = tempfile::tempdir().unwrap();
+    let config_path = temp.path().join("config.json");
+    fs::write(
+        &config_path,
+        r#"{
+            "active_mode": "desktop",
+            "modes": {
+                "desktop": {
+                    "left": "focus-column-or-monitor-left",
+                    "down": "focus-window-or-workspace-down",
+                    "up": "focus-window-or-workspace-up",
+                    "right": "focus-column-or-monitor-right"
+                }
+            }
+        }"#,
+    )
+    .unwrap();
+
+    let check = run_config(&config_path, &["config", "check"]);
+    assert!(check.status.success());
+    let check = String::from_utf8(check.stdout).unwrap();
+    assert!(check.contains(&format!("valid: {} (file)\n", config_path.display())));
+    assert!(check.contains("active mode: desktop\n"));
+
+    let show = run_config(&config_path, &["config", "show", "--json"]);
+    assert!(show.status.success());
+    let show: serde_json::Value = serde_json::from_slice(&show.stdout).unwrap();
+    assert_eq!(show["path"], config_path.to_string_lossy().as_ref());
+    assert_eq!(show["source"], "file");
+    assert_eq!(show["config"]["active_mode"], "desktop");
+    assert_eq!(
+        show["config"]["zellij"]["terminal_app_ids"][0],
+        "com.mitchellh.ghostty"
+    );
+}
+
+#[test]
+fn config_check_rejects_semantically_invalid_config() {
+    let temp = tempfile::tempdir().unwrap();
+    let config_path = temp.path().join("config.json");
+    fs::write(
+        &config_path,
+        r#"{
+            "active_mode": "missing",
+            "modes": {}
+        }"#,
+    )
+    .unwrap();
+
+    let output = run_config(&config_path, &["config", "check"]);
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8(output.stderr)
+            .unwrap()
+            .contains("navigation mode \"missing\" is not defined")
+    );
+}
+
+#[test]
+fn config_show_exposes_missing_file_defaults() {
+    let temp = tempfile::tempdir().unwrap();
+    let config_path = temp.path().join("missing.json");
+    let output = run_config(&config_path, &["config", "show", "--json"]);
+    assert!(output.status.success());
+    let output: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(output["source"], "defaults");
+    assert_eq!(output["config"]["active_mode"], "default");
+}
+
+fn run_config(config_path: &std::path::Path, arguments: &[&str]) -> std::process::Output {
+    Command::new(env!("CARGO_BIN_EXE_niri-zvim"))
+        .args(arguments)
+        .env("NIRI_ZVIM_CONFIG", config_path)
+        .output()
+        .unwrap()
 }

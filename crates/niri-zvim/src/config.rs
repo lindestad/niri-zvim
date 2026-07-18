@@ -2,11 +2,11 @@ use std::{collections::BTreeMap, fs, io::ErrorKind, path::PathBuf};
 
 use anyhow::Context;
 use niri_zvim_core::Direction;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 pub(crate) const GHOSTTY_APP_ID: &str = "com.mitchellh.ghostty";
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 pub enum NiriNavigation {
     #[serde(rename = "focus-column-left")]
     ColumnLeft,
@@ -26,7 +26,7 @@ pub enum NiriNavigation {
     WindowOrWorkspaceUp,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct NavigationMode {
     pub left: NiriNavigation,
@@ -55,7 +55,7 @@ impl NavigationMode {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
     active_mode: String,
@@ -64,7 +64,7 @@ pub struct Config {
     zellij: ZellijDiscovery,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct ZellijDiscovery {
     pub terminal_app_ids: Vec<String>,
@@ -128,6 +128,18 @@ impl Config {
             .with_context(|| format!("could not parse {}", path.display()))
     }
 
+    pub fn load_validated() -> anyhow::Result<Self> {
+        let config = Self::load()?;
+        config.validate()?;
+        Ok(config)
+    }
+
+    pub fn validate(&self) -> anyhow::Result<()> {
+        self.active_mode()?;
+        self.zellij_discovery()?;
+        Ok(())
+    }
+
     pub fn active_mode(&self) -> anyhow::Result<NavigationMode> {
         self.modes
             .get(&self.active_mode)
@@ -145,7 +157,7 @@ impl Config {
     }
 }
 
-pub(crate) fn config_path() -> PathBuf {
+pub fn config_path() -> PathBuf {
     if let Some(path) = std::env::var_os("NIRI_ZVIM_CONFIG") {
         return path.into();
     }
@@ -212,6 +224,7 @@ mod tests {
         .unwrap();
 
         assert!(config.active_mode().is_err());
+        assert!(config.validate().is_err());
     }
 
     #[test]
