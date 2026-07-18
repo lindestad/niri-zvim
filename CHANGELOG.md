@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.2.0 (unreleased)
+## 0.2.0
 
 - Version the navigation and adapter wire protocols and reject mismatched
   clients instead of interpreting stale message formats.

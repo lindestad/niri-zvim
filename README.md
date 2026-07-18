@@ -3,11 +3,9 @@
 State-synchronized directional navigation across niri windows, Zellij panes,
 and Neovim splits.
 
-Version 0.2 is under development. Version 0.1 remains a developer preview for
-the stack it was built and tested on.
-Zellij discovery now accepts configured terminal app IDs and title separators;
-Ghostty remains the tested default. The source installer is intended for
-people who are comfortable inspecting and maintaining a local checkout. See
+Version 0.2 is an enthusiast release for the current niri, Zellij, and Neovim
+stack documented below. Zellij discovery accepts configured terminal app IDs
+and title separators; Ghostty remains the tested default. See
 [support and compatibility](https://github.com/lindestad/niri-zvim/blob/main/docs/support.md)
 before installing.
 
@@ -48,7 +46,7 @@ GitHub release archives contain the same complete integration prebuilt for
 their named Linux target and do not require Rust. Extract an archive, verify
 its adjacent `.sha256` file, and run its `install` script.
 
-Once published, `cargo install --locked niri-zvim` installs only the native
+`cargo install --locked niri-zvim` installs only the native
 client and daemon. It does not install the Zellij WASM plugin, Neovim adapter,
 configuration, or service; the source or release-archive installer is the
 complete path.

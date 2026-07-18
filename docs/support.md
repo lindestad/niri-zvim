@@ -2,19 +2,18 @@
 
 ## Release status
 
-Version 0.2 is under development. Version 0.1 is a developer preview of the
-current architecture, not yet a general terminal-navigation package. It is
-supported as a complete integration on the stack below. Other combinations may
-work, but have not been validated and should not be presented as supported.
+Version 0.2 is an enthusiast release of the complete integration on the stack
+below. Other combinations may work, but have not been validated and should not
+be presented as supported.
 
-| Component | 0.1 support |
+| Component | 0.2 support |
 | --- | --- |
 | Operating system | Linux in a running niri Wayland session |
 | niri | 26.04, using `niri-ipc` 26.4.0 |
 | Zellij | 0.44.3 |
 | Neovim | 0.12.4 |
 | Terminal for direct Neovim | Any terminal that delivers terminal-focus events to Neovim |
-| Terminal for Zellij | Ghostty GTK 1.3 is tested; 0.2 accepts configured Wayland app IDs and title separators |
+| Terminal for Zellij | Ghostty GTK 1.3 is tested; configured Wayland app IDs and title separators are accepted |
 | Rust source build | Rust 1.97.1 or newer with `wasm32-wasip1` available through rustup |
 | Service manager | systemd user services through the complete installer |
 
@@ -101,5 +100,5 @@ Neovim's user site.
 - renamed Zellij sessions; and
 - automatic service setup without a systemd user manager.
 
-Configurable terminal discovery and multiple attached clients are implemented
-for 0.2 within the identity assumptions above.
+Configurable terminal discovery and multiple attached clients are supported
+within the identity assumptions above.
