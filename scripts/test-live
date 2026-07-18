@@ -68,7 +68,18 @@ original_workspaces="$(niri msg --json workspaces)"
 
 zellij_plugin="${NIRI_ZVIM_ZELLIJ_PLUGIN:-$config_home/zellij/plugins/niri-zvim.wasm}"
 zellij_permission_dir="$zellij_cache_home/zellij"
-mkdir -p "$zellij_permission_dir"
+daemon_pid="$(systemctl --user show --property MainPID --value niri-zvim.service)"
+daemon_cache_home="$(tr '\0' '\n' <"/proc/$daemon_pid/environ" |
+  sed -n 's/^XDG_CACHE_HOME=//p' | tail -n 1)"
+if [[ -z "$daemon_cache_home" ]]; then
+  daemon_home="$(tr '\0' '\n' <"/proc/$daemon_pid/environ" |
+    sed -n 's/^HOME=//p' | tail -n 1)"
+  daemon_cache_home="${daemon_home:-$HOME}/.cache"
+fi
+daemon_session_info="$daemon_cache_home/zellij/contract_version_1/session_info"
+zellij_session_parent="$zellij_cache_home/zellij/contract_version_1"
+mkdir -p "$zellij_permission_dir" "$daemon_session_info" "$zellij_session_parent"
+ln -s "$daemon_session_info" "$zellij_session_parent/session_info"
 quoted_plugin_path="$(jq -Rn --arg value "$zellij_plugin" '$value')"
 {
   printf '%s {\n' "$quoted_plugin_path"

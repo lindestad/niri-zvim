@@ -127,7 +127,8 @@ For individual Rust checks, run:
 The live part launches disposable Ghostty windows with an isolated test config.
 Disposable Zellij sessions use an isolated permission cache that grants the
 repository's plugin only the four permissions documented above; the user's
-Zellij permission cache is not read or changed.
+Zellij permission cache is not read or changed. Their session metadata remains
+visible to the daemon so the test exercises its normal topology refresh path.
 It traverses empty terminals, a Niri tabbed column, direct Neovim instances,
 one- and three-pane Zellij sessions, nested Neovim windows inside Zellij panes,
 and three temporary workspaces in both directions. Do not interact with the
