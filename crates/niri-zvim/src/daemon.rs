@@ -2,6 +2,7 @@ use std::{
     collections::{BTreeMap, VecDeque},
     fs,
     io::ErrorKind,
+    os::unix::fs::PermissionsExt,
     path::Path,
 };
 
@@ -264,10 +265,11 @@ impl Daemon {
 pub async fn run_daemon() -> anyhow::Result<()> {
     let niri_mode = Config::load()?.active_mode()?;
     info!(?niri_mode, "loaded Niri navigation mode");
-    let path = socket_path();
+    let path = socket_path()?;
     remove_stale_socket(&path)?;
     let listener =
         UnixListener::bind(&path).with_context(|| format!("could not bind {}", path.display()))?;
+    secure_socket(&path)?;
     info!(path = %path.display(), "listening");
 
     let (events_tx, mut events_rx) = mpsc::channel(1024);
@@ -298,6 +300,11 @@ fn remove_stale_socket(path: &Path) -> anyhow::Result<()> {
         Err(error) if error.kind() == ErrorKind::NotFound => Ok(()),
         Err(error) => Err(error).with_context(|| format!("could not remove {}", path.display())),
     }
+}
+
+fn secure_socket(path: &Path) -> anyhow::Result<()> {
+    fs::set_permissions(path, fs::Permissions::from_mode(0o600))
+        .with_context(|| format!("could not secure {}", path.display()))
 }
 
 async fn accept_loop(listener: UnixListener, events: mpsc::Sender<DaemonEvent>) {
@@ -352,4 +359,25 @@ async fn handle_connection(
             .await?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{os::unix::fs::PermissionsExt, os::unix::net::UnixListener as StdUnixListener};
+
+    use super::*;
+
+    #[test]
+    fn daemon_socket_is_user_only() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("daemon.sock");
+        let _listener = StdUnixListener::bind(&path).unwrap();
+
+        secure_socket(&path).unwrap();
+
+        assert_eq!(
+            fs::metadata(path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+    }
 }

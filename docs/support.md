@@ -26,7 +26,9 @@ niri-zvim release is prepared.
 
 The daemon only relies on niri IPC and a Unix socket. Systemd and Ghostty are
 requirements of the current complete installation and discovery path, not of
-the routing graph itself.
+the routing graph itself. The daemon and adapters require either the standard
+`XDG_RUNTIME_DIR` environment or an explicit absolute `NIRI_ZVIM_SOCKET`;
+they do not create a socket in the shared temporary directory.
 
 ## Zellij discovery assumptions
 

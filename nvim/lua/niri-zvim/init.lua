@@ -15,8 +15,12 @@ local navigation_pending = false
 local acknowledged_sequence
 
 local function socket_path()
-  return vim.env.NIRI_ZVIM_SOCKET
-    or ((vim.env.XDG_RUNTIME_DIR or "/tmp") .. "/niri-zvim.sock")
+  if vim.env.NIRI_ZVIM_SOCKET and vim.env.NIRI_ZVIM_SOCKET ~= "" then
+    return vim.env.NIRI_ZVIM_SOCKET
+  end
+  if vim.env.XDG_RUNTIME_DIR and vim.env.XDG_RUNTIME_DIR ~= "" then
+    return vim.env.XDG_RUNTIME_DIR .. "/niri-zvim.sock"
+  end
 end
 
 local function parent()
@@ -205,11 +209,16 @@ local function reconnect()
 end
 
 function M.connect()
+  local path = socket_path()
+  if not path then
+    vim.notify_once("niri-zvim requires XDG_RUNTIME_DIR or NIRI_ZVIM_SOCKET", vim.log.levels.ERROR)
+    return
+  end
   if pipe and not pipe:is_closing() then
     pipe:close()
   end
   pipe = uv.new_pipe(false)
-  pipe:connect(socket_path(), function(error)
+  pipe:connect(path, function(error)
     if error then
       pipe:close()
       reconnect()

@@ -26,7 +26,7 @@ fn main() -> anyhow::Result<()> {
         }
         _ => anyhow::bail!(usage()),
     };
-    let mut socket = UnixStream::connect(socket_path())?;
+    let mut socket = UnixStream::connect(socket_path()?)?;
     socket.write_all(&[direction.wire_byte()])?;
     Ok(())
 }
