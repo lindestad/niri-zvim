@@ -23,11 +23,11 @@ warning_pid_file="$runtime_dir/niri-zvim-live-$tag-warning.pid"
 source "$project_dir/scripts/test-output"
 
 if (($# > 1)); then
-  echo "usage: scripts/test-live [all|direct|tabs|zellij-one|zellij-three|discovery|nested|consumed|consumed-zellij|consumed-reflow|consumed-nvim|workspaces]" >&2
+  echo "usage: scripts/test-live [all|direct|tabs|zellij-one|zellij-three|zellij-multi|discovery|nested|consumed|consumed-zellij|consumed-reflow|consumed-nvim|workspaces]" >&2
   exit 2
 fi
 case "$selected_case" in
-  all | direct | tabs | zellij-one | zellij-three | discovery | nested | consumed | consumed-zellij | consumed-reflow | consumed-nvim | workspaces) ;;
+  all | direct | tabs | zellij-one | zellij-three | zellij-multi | discovery | nested | consumed | consumed-zellij | consumed-reflow | consumed-nvim | workspaces) ;;
   *)
     echo "unknown live test case: $selected_case" >&2
     exit 2
@@ -70,6 +70,7 @@ original_workspaces="$(niri msg --json workspaces)"
 
 zellij_plugin="${NIRI_ZVIM_ZELLIJ_PLUGIN:-$config_home/zellij/plugins/niri-zvim.wasm}"
 zellij_permission_dir="$zellij_cache_home/zellij"
+zellij_version="$(zellij --version | awk '{print $2}')"
 daemon_pid="$(systemctl --user show --property MainPID --value niri-zvim.service)"
 daemon_cache_home="$(tr '\0' '\n' <"/proc/$daemon_pid/environ" |
   sed -n 's/^XDG_CACHE_HOME=//p' | tail -n 1)"
@@ -80,8 +81,10 @@ if [[ -z "$daemon_cache_home" ]]; then
 fi
 daemon_session_info="$daemon_cache_home/zellij/contract_version_1/session_info"
 zellij_session_parent="$zellij_cache_home/zellij/contract_version_1"
-mkdir -p "$zellij_permission_dir" "$daemon_session_info" "$zellij_session_parent"
+mkdir -p "$zellij_permission_dir/$zellij_version" "$daemon_session_info" \
+  "$zellij_session_parent"
 ln -s "$daemon_session_info" "$zellij_session_parent/session_info"
+: >"$zellij_permission_dir/$zellij_version/seen_release_notes"
 quoted_plugin_path="$(jq -Rn --arg value "$zellij_plugin" '$value')"
 {
   printf '%s {\n' "$quoted_plugin_path"
@@ -102,6 +105,8 @@ source "$live_tests_dir/tabs.sh"
 source "$live_tests_dir/zellij-one.sh"
 # shellcheck source=scripts/live-tests/zellij-three.sh
 source "$live_tests_dir/zellij-three.sh"
+# shellcheck source=scripts/live-tests/zellij-multi.sh
+source "$live_tests_dir/zellij-multi.sh"
 # shellcheck source=scripts/live-tests/discovery.sh
 source "$live_tests_dir/discovery.sh"
 # shellcheck source=scripts/live-tests/nested.sh
@@ -189,6 +194,9 @@ if [[ "$selected_case" == all || "$selected_case" == zellij-one ]]; then
 fi
 if [[ "$selected_case" == all || "$selected_case" == zellij-three ]]; then
   run_case "three-pane Zellij traversal" test_zellij_three_panes
+fi
+if [[ "$selected_case" == all || "$selected_case" == zellij-multi ]]; then
+  run_case "multiple attached Zellij clients" test_zellij_multiple_clients
 fi
 if [[ "$selected_case" == all || "$selected_case" == discovery ]]; then
   run_case "configured terminal discovery" test_configured_terminal_discovery

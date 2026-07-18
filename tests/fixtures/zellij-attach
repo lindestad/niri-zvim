@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if (($# != 2)); then
+  echo "usage: zellij-attach CACHE_HOME SESSION" >&2
+  exit 2
+fi
+
+cache_home="$1"
+session="$2"
+printf '\033]2;%s\007' "$session"
+exec env XDG_CACHE_HOME="$cache_home" zellij attach "$session"

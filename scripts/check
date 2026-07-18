@@ -30,6 +30,7 @@ shellcheck -x \
   scripts/test-live \
   scripts/test-output \
   tests/fixtures/terminal \
+  tests/fixtures/zellij-attach \
   tests/fixtures/warning
 
 scripts/check-install

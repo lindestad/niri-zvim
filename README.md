@@ -123,6 +123,12 @@ fields, and restart `niri-zvim.service`. Discovery configuration selects
 windows and derives session names; it does not launch or reconfigure the
 terminal.
 
+Several terminal windows may attach to one Zellij session. The daemon pairs
+Zellij client IDs with Niri window IDs in creation order and targets the
+background plugin instance for the focused window. Each attached surface must
+therefore retain the session-bearing title described above; check status to
+see the resulting client-to-window bindings.
+
 ## Status
 
 Query the running daemon and its current graph with:
@@ -181,9 +187,10 @@ repository's plugin only the four permissions documented above; the user's
 Zellij permission cache is not read or changed. Their session metadata remains
 visible to the daemon so the test exercises its normal topology refresh path.
 It traverses empty terminals, a Niri tabbed column, direct Neovim instances,
-one- and three-pane Zellij sessions, nested Neovim windows inside Zellij panes,
-and three temporary workspaces in both directions. Do not interact with the
-desktop until it finishes. Unexpected focus on a window outside the test is
+one- and three-pane Zellij sessions, two clients attached to one session,
+nested Neovim windows inside Zellij panes, and three temporary workspaces in
+both directions. Do not interact with the desktop until it finishes.
+Unexpected focus on a window outside the test is
 reported as an interrupted run rather than a navigation failure. The harness
 terminates only test processes, removes only unique test workspace names,
 verifies that the original windows and workspaces are unchanged, and restores
@@ -194,8 +201,9 @@ per case. Failures print the last checkpoint, CPU load and pressure, plus the
 current Niri, Zellij, Neovim, and process state before cleanup. Set
 `NIRI_ZVIM_LIVE_TIMEOUT` to change the per-case cap when debugging. Test
 Neovim instances use a minimal init from the repository rather than the user's
-configuration. Run one case in isolation with, for example,
-`scripts/test-live tabs`.
+configuration. The disposable Zellij cache also suppresses release notes so a
+first-run plugin pane cannot masquerade as a terminal client. Run one case in
+isolation with, for example, `scripts/test-live tabs`.
 
 `scripts/test-live` handles preflight checks and orchestration. Shared fixture
 helpers and the individual scenario files live under `scripts/live-tests/`.

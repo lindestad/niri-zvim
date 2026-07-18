@@ -17,10 +17,10 @@ struct ListedPane {
     tab_position: usize,
 }
 
-pub(super) async fn query_snapshot(
+pub(super) async fn query_snapshots(
     session: &str,
-    window_id: u64,
-) -> anyhow::Result<ZellijClientState> {
+    window_ids: &[u64],
+) -> anyhow::Result<Vec<ZellijClientState>> {
     let panes = Command::new("zellij")
         .args([
             "--session",
@@ -46,27 +46,46 @@ pub(super) async fn query_snapshot(
         clients.status.success(),
         "could not list clients in Zellij session {session}"
     );
-    let (client_id, focused_pane) = focused_client_from_clients(&clients.stdout)
-        .context("Zellij does not have exactly one connected terminal client")?;
+    let clients = terminal_clients_from_output(&clients.stdout);
+    anyhow::ensure!(
+        clients.len() == window_ids.len(),
+        "Zellij has {} terminal clients but discovery found {} Niri windows",
+        clients.len(),
+        window_ids.len()
+    );
     let panes: Vec<ListedPane> = serde_json::from_slice(&panes.stdout)?;
-    snapshot_from_panes(session, window_id, client_id, focused_pane, &panes)
-        .context("Zellij has no focused terminal pane")
+    let mut windows = window_ids.to_vec();
+    windows.sort_unstable();
+    clients
+        .into_iter()
+        .zip(windows)
+        .map(|((client_id, focused_pane), window_id)| {
+            snapshot_from_panes(session, window_id, client_id, focused_pane, &panes)
+                .context("Zellij has no focused terminal pane")
+        })
+        .collect()
 }
 
-fn focused_client_from_clients(output: &[u8]) -> Option<(u16, u32)> {
-    let output = std::str::from_utf8(output).ok()?;
-    let mut clients = output.lines().skip(1).filter_map(|line| {
-        let mut fields = line.split_whitespace();
-        let client_id = fields.next()?.parse::<u16>().ok()?;
-        let pane_id = fields
-            .next()?
-            .strip_prefix("terminal_")?
-            .parse::<u32>()
-            .ok()?;
-        Some((client_id, pane_id))
-    });
-    let focused = clients.next()?;
-    clients.next().is_none().then_some(focused)
+fn terminal_clients_from_output(output: &[u8]) -> Vec<(u16, u32)> {
+    let Ok(output) = std::str::from_utf8(output) else {
+        return Vec::new();
+    };
+    let mut clients: Vec<_> = output
+        .lines()
+        .skip(1)
+        .filter_map(|line| {
+            let mut fields = line.split_whitespace();
+            let client_id = fields.next()?.parse::<u16>().ok()?;
+            let pane_id = fields
+                .next()?
+                .strip_prefix("terminal_")?
+                .parse::<u32>()
+                .ok()?;
+            Some((client_id, pane_id))
+        })
+        .collect();
+    clients.sort_unstable_by_key(|(client_id, _)| *client_id);
+    clients
 }
 
 fn snapshot_from_panes(
@@ -153,12 +172,12 @@ mod tests {
     }
 
     #[test]
-    fn extracts_the_only_connected_terminal_client_focus() {
+    fn extracts_and_orders_connected_terminal_clients() {
         let one = b"CLIENT_ID ZELLIJ_PANE_ID RUNNING_COMMAND\n1 terminal_37 N/A\n";
         let two =
-            b"CLIENT_ID ZELLIJ_PANE_ID RUNNING_COMMAND\n1 terminal_37 N/A\n2 terminal_9 N/A\n";
+            b"CLIENT_ID ZELLIJ_PANE_ID RUNNING_COMMAND\n2 terminal_9 N/A\n1 terminal_37 N/A\n3 plugin_1 N/A\n";
 
-        assert_eq!(focused_client_from_clients(one), Some((1, 37)));
-        assert_eq!(focused_client_from_clients(two), None);
+        assert_eq!(terminal_clients_from_output(one), vec![(1, 37)]);
+        assert_eq!(terminal_clients_from_output(two), vec![(1, 37), (2, 9)]);
     }
 }

@@ -1,8 +1,8 @@
-use std::collections::BTreeSet;
+use std::collections::BTreeMap;
 
 use niri_zvim_core::NiriWindow;
 use tokio::{
-    sync::mpsc,
+    sync::{mpsc, watch},
     time::{Duration, sleep},
 };
 use tracing::warn;
@@ -21,18 +21,19 @@ pub(crate) fn configured_plugin_path() -> std::path::PathBuf {
 
 pub struct BridgeManager {
     discovery: ZellijDiscovery,
-    sessions: BTreeSet<String>,
+    sessions: BTreeMap<String, watch::Sender<Vec<u64>>>,
 }
 
 impl BridgeManager {
     pub fn new(discovery: ZellijDiscovery) -> Self {
         Self {
             discovery,
-            sessions: BTreeSet::new(),
+            sessions: BTreeMap::new(),
         }
     }
 
     pub fn observe(&mut self, windows: &[NiriWindow], events: &mpsc::Sender<DaemonEvent>) {
+        let mut discovered = BTreeMap::<String, Vec<u64>>::new();
         for window in windows {
             let Some(app_id) = window.app_id.as_deref() else {
                 continue;
@@ -44,18 +45,53 @@ impl BridgeManager {
                 continue;
             };
             let session = session_from_title(title, &self.discovery.session_title_separator);
-            if !session_socket_exists(session) || !self.sessions.insert(session.to_owned()) {
+            if !session_socket_exists(session) {
                 continue;
             }
+            discovered
+                .entry(session.to_owned())
+                .or_default()
+                .push(window.id);
+        }
+
+        for window_ids in discovered.values_mut() {
+            window_ids.sort_unstable();
+            window_ids.dedup();
+        }
+
+        let stopped: Vec<_> = self
+            .sessions
+            .keys()
+            .filter(|session| !discovered.contains_key(*session))
+            .cloned()
+            .collect();
+        for session in stopped {
+            self.sessions.remove(&session);
+        }
+
+        for (session, window_ids) in discovered {
+            if let Some(windows) = self.sessions.get(&session) {
+                windows.send_if_modified(|current| {
+                    if *current == window_ids {
+                        false
+                    } else {
+                        *current = window_ids.clone();
+                        true
+                    }
+                });
+                continue;
+            }
+
+            let (window_updates, windows) = watch::channel(window_ids);
+            self.sessions.insert(session.clone(), window_updates);
             let events = events.clone();
-            let session = session.to_owned();
-            let window_id = window.id;
             tokio::spawn(async move {
                 loop {
-                    if let Err(error) = run_bridge(&session, window_id, events.clone()).await {
+                    if let Err(error) = run_bridge(&session, windows.clone(), events.clone()).await
+                    {
                         warn!(%session, %error, "Zellij bridge stopped");
                     }
-                    if !session_socket_exists(&session) {
+                    if windows.has_changed().is_err() || !session_socket_exists(&session) {
                         break;
                     }
                     sleep(Duration::from_millis(250)).await;

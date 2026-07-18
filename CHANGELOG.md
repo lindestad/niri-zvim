@@ -10,6 +10,8 @@
   sockets, adapter files, and Zellij permission approval.
 - Make Zellij terminal app IDs and session-title separators configurable, with
   an isolated live test that proves a non-default app ID drives discovery.
+- Support several terminal clients attached to one Zellij session with
+  client-targeted plugin messages and bidirectional live traversal.
 
 ## 0.1.1
 

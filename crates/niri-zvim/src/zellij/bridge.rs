@@ -8,7 +8,7 @@ use niri_zvim_core::{AdapterMessage, DaemonMessage, ProtocolMessage};
 use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
     process::Command,
-    sync::mpsc,
+    sync::{mpsc, watch},
     time::{Duration, Instant, sleep, sleep_until},
 };
 
@@ -58,12 +58,12 @@ use crate::daemon::{ADAPTER_OUTGOING_CAPACITY, DaemonEvent};
 
 use super::{
     metadata::{plugin_path, watch_session_metadata},
-    snapshot::query_snapshot,
+    snapshot::query_snapshots,
 };
 
 pub(super) async fn run_bridge(
     session: &str,
-    window_id: u64,
+    mut windows: watch::Receiver<Vec<u64>>,
     events: mpsc::Sender<DaemonEvent>,
 ) -> anyhow::Result<()> {
     let plugin = plugin_path();
@@ -102,7 +102,12 @@ pub(super) async fn run_bridge(
     let (refresh_tx, refresh_rx) = mpsc::unbounded_channel();
     let revisions = Arc::new(AtomicU64::new(0));
 
-    if let Ok(state) = query_snapshot(session, window_id).await {
+    let initial_windows = windows.borrow().clone();
+    for mut state in query_snapshots(session, &initial_windows)
+        .await
+        .unwrap_or_default()
+    {
+        state.revision = revisions.fetch_add(1, Ordering::Relaxed) + 1;
         events
             .send(DaemonEvent::Adapter {
                 message: AdapterMessage::ZellijSnapshot { state },
@@ -117,7 +122,7 @@ pub(super) async fn run_bridge(
     ));
     let fallback_refresher = tokio::spawn(fallback_refresh_loop(
         session.to_owned(),
-        window_id,
+        windows.clone(),
         events.clone(),
         sink.clone(),
         revisions.clone(),
@@ -126,16 +131,34 @@ pub(super) async fn run_bridge(
 
     let bind = serde_json::to_vec(&ProtocolMessage::new(DaemonMessage::ZellijSync {
         session: session.to_owned(),
-        window_ids: vec![window_id],
+        window_ids: windows.borrow().clone(),
     }))?;
     stdin.write_all(&bind).await?;
     stdin.write_u8(b'\n').await?;
     stdin.flush().await?;
-    info!(%session, window_id, "connected Zellij bridge");
+    info!(%session, windows = windows.borrow().len(), "connected Zellij bridge");
 
     let action_refresh = refresh_tx.clone();
+    let writer_session = session.to_owned();
     tokio::spawn(async move {
-        while let Some(message) = actions.recv().await {
+        loop {
+            let message = tokio::select! {
+                message = actions.recv() => {
+                    let Some(message) = message else {
+                        break;
+                    };
+                    message
+                }
+                changed = windows.changed() => {
+                    if changed.is_err() {
+                        break;
+                    }
+                    DaemonMessage::ZellijSync {
+                        session: writer_session.clone(),
+                        window_ids: windows.borrow().clone(),
+                    }
+                }
+            };
             let sequence = match &message {
                 DaemonMessage::ZellijNavigate { sequence, .. } => Some(*sequence),
                 DaemonMessage::Navigate { .. } | DaemonMessage::ZellijSync { .. } => None,
@@ -191,7 +214,7 @@ pub(super) async fn run_bridge(
 
 async fn fallback_refresh_loop(
     session: String,
-    window_id: u64,
+    windows: watch::Receiver<Vec<u64>>,
     events: mpsc::Sender<DaemonEvent>,
     sink: mpsc::Sender<DaemonMessage>,
     revisions: Arc<AtomicU64>,
@@ -224,15 +247,18 @@ async fn fallback_refresh_loop(
                 () = &mut timer => {
                     state.pending_sequence = None;
                     state.metadata_dirty = false;
-                    let Ok(mut snapshot) = query_snapshot(&session, window_id).await else {
+                    let window_ids = windows.borrow().clone();
+                    let Ok(snapshots) = query_snapshots(&session, &window_ids).await else {
                         break;
                     };
-                    snapshot.revision = revisions.fetch_add(1, Ordering::Relaxed) + 1;
-                    if events.send(DaemonEvent::Adapter {
-                        message: AdapterMessage::ZellijSnapshot { state: snapshot },
-                        sink: sink.clone(),
-                    }).await.is_err() {
-                        return;
+                    for mut snapshot in snapshots {
+                        snapshot.revision = revisions.fetch_add(1, Ordering::Relaxed) + 1;
+                        if events.send(DaemonEvent::Adapter {
+                            message: AdapterMessage::ZellijSnapshot { state: snapshot },
+                            sink: sink.clone(),
+                        }).await.is_err() {
+                            return;
+                        }
                     }
                     break;
                 }

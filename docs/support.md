@@ -44,7 +44,7 @@ inference. All of the following must be true:
 - niri reports a Wayland window title containing the session name, optionally
   followed by `zellij.session_title_separator` and terminal content;
 - a same-named Zellij session socket exists;
-- the session has one unambiguous connected terminal client;
+- every attached terminal client has one matching discovered Niri window;
 - Zellij session metadata is available for the supported fallback refresh
   path; and
 - the user has approved the plugin's requested Zellij permissions.
@@ -61,10 +61,15 @@ permission is granted. Normal navigation uses the persistent plugin pipe;
 session metadata and Zellij CLI queries are reconciliation fallbacks rather
 than work performed for every keypress.
 
-One daemon bridge is currently created per session name and is bound to the
-first matching niri window. Multiple Ghostty windows or multiple attached
-terminal clients for the same Zellij session are therefore unsupported.
-Renaming a running session after discovery is also unsupported.
+One daemon bridge is created per session name. Zellij supplies one background
+plugin instance per attached terminal client, and navigation is tagged with
+the target client ID. When several windows attach to the same session, sorted
+client IDs are paired with sorted Niri window IDs; this models sequential
+window creation and attachment. Every window must keep a session-bearing title.
+In particular, if `zellij attach` leaves the terminal title at its command
+name, a shell wrapper or terminal integration must set the title to the session
+name before attaching. Renaming a running session after discovery remains
+unsupported.
 
 ## Neovim assumptions
 
@@ -88,10 +93,10 @@ opt-out interface is planned for 0.2.
 
 - Vim rather than Neovim;
 - terminals that do not expose a stable app ID and session-bearing title;
-- more than one niri window attached to the same Zellij session;
-- ambiguous multi-client Zellij sessions;
+- concurrently created attachments whose client and window creation orders do
+  not correspond;
 - renamed Zellij sessions; and
 - non-systemd installation through the 0.1 installer.
 
-Configurable terminal discovery is complete for 0.2. The next identity work
-removes the one-window-per-session restriction.
+Configurable terminal discovery and multiple attached clients are implemented
+for 0.2 within the identity assumptions above.

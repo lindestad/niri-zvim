@@ -75,9 +75,11 @@ state changes. Benchmark boundaries and interpretation are specified in
 Zellij focus is scoped to a connected client, not the session as a whole.
 Session-wide pane metadata can mark several panes `is_focused` when diagnostic
 or bootstrap clients have different histories. The plugin queries the pane for
-its associated client directly. Background CLI snapshots use `list-clients`
-and are accepted only when exactly one connected terminal client makes the
-mapping unambiguous.
+its associated client directly. Zellij creates one instance of the background
+plugin per attached terminal client; the shared session pipe tags navigation
+with a client ID so only that instance acts. Client IDs and matching Niri
+window IDs are paired in creation order. Background CLI snapshots use the same
+ordered `list-clients` mapping and publish one state per terminal client.
 
 Pane resize and layout changes are normal authoritative topology updates.
 Zellij's plugin emits `PaneUpdate`, and a metadata watcher also fingerprints

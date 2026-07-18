@@ -47,6 +47,13 @@ normal daemon ignores them. The case verifies compositor metadata, bridge
 connection, and navigation through three Zellij panes, proving that discovery
 uses configuration rather than a hard-coded Ghostty identifier.
 
+The multi-client case attaches two Ghostty windows to one three-pane Zellij
+session. It verifies that status binds distinct client IDs to distinct Niri
+windows, then traverses both views in both directions while checking that a
+targeted move never changes the other client's focus. Its isolated Zellij
+cache pre-approves only the plugin's required permissions and marks the current
+release notes as seen so first-run UI cannot replace a terminal client.
+
 ## Problems found while building the suite
 
 Niri's `tile_pos_in_workspace_view` is optional and may be absent even for a
