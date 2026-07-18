@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+title="$1"
+pid_file="$2"
+
+printf '%s\n' "$$" >"$pid_file"
+printf '\033]2;%s\007' "$title"
+clear
+printf '\n'
+printf '  NIRI-ZVIM LIVE TESTS\n\n'
+printf '  Do not use the mouse or keyboard until the final test summary.\n'
+printf '  Desktop control begins when this warning closes.\n'
+exec sleep infinity

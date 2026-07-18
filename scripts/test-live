@@ -8,6 +8,7 @@ config_home="${XDG_CONFIG_HOME:-$HOME/.config}"
 daemon_config="${NIRI_ZVIM_CONFIG:-$config_home/niri-zvim/config.json}"
 ghostty_config="$project_dir/tests/ghostty.config"
 terminal_fixture="$project_dir/tests/fixtures/terminal"
+warning_fixture="$project_dir/tests/fixtures/warning"
 nvim_fixture="$project_dir/tests/fixtures/nvim.lua"
 tag="$$"
 zellij_cache_home="$runtime_dir/niri-zvim-live-$tag-cache"
@@ -17,6 +18,7 @@ selected_case="${1:-all}"
 case_state_file="$runtime_dir/niri-zvim-live-$tag.state"
 case_debug_file="$runtime_dir/niri-zvim-live-$tag.debug"
 case_interruption_file="$runtime_dir/niri-zvim-live-$tag.interrupted"
+warning_pid_file="$runtime_dir/niri-zvim-live-$tag-warning.pid"
 # shellcheck source=scripts/test-output
 source "$project_dir/scripts/test-output"
 
@@ -116,8 +118,12 @@ test_cpu_count="$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo unknown)"
 test_start_cpu_strain="$(cpu_strain_snapshot)"
 
 restore_focus() {
+  if [[ -s "$warning_pid_file" ]]; then
+    kill "$(<"$warning_pid_file")" >/dev/null 2>&1 || true
+  fi
   niri msg action focus-window --id "$original_window" >/dev/null 2>&1 || true
-  rm -f "$case_state_file" "$case_debug_file" "$case_interruption_file"
+  rm -f "$case_state_file" "$case_debug_file" "$case_interruption_file" \
+    "$warning_pid_file"
   rm -rf "$zellij_cache_home"
 }
 trap restore_focus EXIT
@@ -132,6 +138,32 @@ export operation_timeout_seconds case_state_file case_debug_file case_interrupti
 export original_window original_windows original_workspaces
 export test_cpu_count test_start_cpu_strain
 export TEST_RED TEST_GREEN TEST_YELLOW TEST_RESET
+
+show_live_warning() {
+  local title="niri-zvim-live-$tag-warning"
+  local window pid
+  timeout --signal=TERM --kill-after=2s "${operation_timeout_seconds}s" \
+    ghostty +new-window \
+    --config-default-files=false \
+    --config-file="$ghostty_config" \
+    --font-size=18 \
+    --window-width=68 \
+    --window-height=7 \
+    -e "$warning_fixture" "$title" "$warning_pid_file"
+  wait_for_file "$warning_pid_file"
+  window="$(wait_for_window "$title" exact)"
+  focus_niri_window "$window"
+  niri msg action move-window-to-floating >/dev/null
+  niri msg action center-window >/dev/null
+  sleep 2
+  pid="$(<"$warning_pid_file")"
+  kill "$pid" >/dev/null 2>&1 || true
+  wait_for_windows_gone "$window"
+  focus_niri_window "$original_window"
+  rm -f "$warning_pid_file"
+}
+
+show_live_warning
 
 cat <<'EOF'
 This test opens and focuses disposable Ghostty windows and creates temporary

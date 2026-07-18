@@ -14,6 +14,10 @@ If focus moves to a window outside the test during an assertion, the harness
 stops running further scenarios and reports the run as interrupted rather than
 as a product failure.
 
+Immediately before the first case, the harness displays a small floating
+Ghostty warning for two seconds. The original focused window is restored after
+the warning closes and before any fixture workspace is created.
+
 ## Two kinds of transition
 
 Checkpoint transitions send one command, poll authoritative Niri, Zellij, and
