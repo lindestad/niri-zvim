@@ -1,17 +1,8 @@
-use std::{
-    io::{Read, Write},
-    os::unix::net::UnixStream,
-    time::Duration,
-};
+use std::{io::Write, os::unix::net::UnixStream};
 
 use anyhow::Context;
-use niri_zvim::socket_path;
-use niri_zvim_core::{
-    ControlResponse, DaemonStatus, Direction, NvimParent, ProtocolMessage, status_frame,
-};
-
-const STATUS_TIMEOUT: Duration = Duration::from_secs(1);
-const MAX_STATUS_BYTES: u64 = 1024 * 1024;
+use niri_zvim::{doctor_report, request_status, socket_path};
+use niri_zvim_core::{Direction, NvimParent};
 
 fn main() -> anyhow::Result<()> {
     let arguments: Vec<_> = std::env::args().skip(1).collect();
@@ -27,6 +18,8 @@ fn main() -> anyhow::Result<()> {
         ["right"] => navigate(Direction::Right),
         ["status"] => print_status(false),
         ["status", "--json"] => print_status(true),
+        ["doctor"] => print_doctor(false),
+        ["doctor", "--json"] => print_doctor(true),
         ["-V" | "--version"] => {
             println!("niri-zvim {}", env!("CARGO_PKG_VERSION"));
             Ok(())
@@ -94,32 +87,17 @@ fn print_status(json: bool) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn request_status() -> anyhow::Result<DaemonStatus> {
-    let path = socket_path()?;
-    let mut socket = UnixStream::connect(&path)
-        .with_context(|| format!("could not connect to daemon at {}", path.display()))?;
-    socket.set_read_timeout(Some(STATUS_TIMEOUT))?;
-    socket.set_write_timeout(Some(STATUS_TIMEOUT))?;
-    socket.write_all(&status_frame())?;
-    let mut encoded = Vec::new();
-    socket
-        .take(MAX_STATUS_BYTES + 1)
-        .read_to_end(&mut encoded)
-        .context("could not read daemon status")?;
-    anyhow::ensure!(
-        !encoded.is_empty(),
-        "daemon returned no status; client and daemon protocols may not match"
-    );
-    anyhow::ensure!(
-        encoded.len() as u64 <= MAX_STATUS_BYTES,
-        "daemon status exceeds {MAX_STATUS_BYTES} bytes"
-    );
-    let response = serde_json::from_slice::<ProtocolMessage<ControlResponse>>(&encoded)
-        .context("daemon returned an invalid status response")?
-        .into_current()?;
-    match response {
-        ControlResponse::Status { status } => Ok(status),
+fn print_doctor(json: bool) -> anyhow::Result<()> {
+    let report = doctor_report();
+    if json {
+        println!("{}", serde_json::to_string_pretty(&report)?);
+    } else {
+        report.print_human();
     }
+    if !report.healthy {
+        std::process::exit(1);
+    }
+    Ok(())
 }
 
 fn optional_id(id: Option<u64>) -> String {
@@ -148,5 +126,5 @@ fn parent_name(parent: &NvimParent) -> String {
 }
 
 fn usage() -> &'static str {
-    "usage: niri-zvim <left|down|up|right|status [--json]>"
+    "usage: niri-zvim <left|down|up|right|status [--json]|doctor [--json]>"
 }

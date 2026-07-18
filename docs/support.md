@@ -30,6 +30,11 @@ the routing graph itself. The daemon and adapters require either the standard
 `XDG_RUNTIME_DIR` environment or an explicit absolute `NIRI_ZVIM_SOCKET`;
 they do not create a socket in the shared temporary directory.
 
+`niri-zvim doctor` checks these runtime and installation assumptions directly;
+`niri-zvim doctor --json` exposes the same pass, warning, and failure records to
+scripts. It is read-only and does not grant plugin permissions or modify the
+installation.
+
 ## Zellij discovery assumptions
 
 The daemon currently associates a niri window with a Zellij session by

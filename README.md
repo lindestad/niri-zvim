@@ -117,6 +117,21 @@ known Zellij client and Neovim instance. A disconnected entry means topology
 remains in the graph but its executor is no longer attached; this is useful
 diagnostic state rather than a successful health check.
 
+## Doctor
+
+Diagnose the complete installation without changing it:
+
+    niri-zvim doctor
+    niri-zvim doctor --json
+
+Doctor validates the config and exact supported niri, Zellij, and Neovim
+versions; checks the Niri and private daemon sockets; queries the running daemon
+and systemd user services; verifies the Zellij WASM and Neovim runtime files;
+and reports whether the configured plugin has its four required Zellij
+permissions. Failed required checks produce a non-zero exit status. Missing
+Zellij approval is a warning because approving the normal first-use prompt can
+complete that step without reinstalling.
+
 ## Development
 
 Run formatting, unit and integration tests, native and WASM Clippy, ShellCheck,

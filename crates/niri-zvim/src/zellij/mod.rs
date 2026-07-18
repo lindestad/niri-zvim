@@ -15,6 +15,10 @@ mod bridge;
 mod metadata;
 mod snapshot;
 
+pub(crate) fn configured_plugin_path() -> std::path::PathBuf {
+    metadata::plugin_path()
+}
+
 #[derive(Default)]
 pub struct BridgeManager {
     sessions: BTreeSet<String>,

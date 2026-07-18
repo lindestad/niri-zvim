@@ -6,6 +6,8 @@
   clients instead of interpreting stale message formats.
 - Add human-readable and JSON daemon status with live graph, connection, focus,
   and pending-navigation state.
+- Add a read-only doctor command for config, dependency versions, services,
+  sockets, adapter files, and Zellij permission approval.
 
 ## 0.1.1
 

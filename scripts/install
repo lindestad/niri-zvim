@@ -69,3 +69,4 @@ fi
 
 echo "Installed niri-zvim."
 echo "Approve the niri-zvim permission prompt when it first appears in Zellij."
+echo "Run 'niri-zvim doctor' to verify the complete integration."
