@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+project_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+if (($# != 1)); then
+  echo "usage: scripts/release-check <version-tag>" >&2
+  exit 2
+fi
+for command in cargo git grep jq sed; do
+  command -v "$command" >/dev/null || {
+    echo "$command is required" >&2
+    exit 1
+  }
+done
+
+tag="$1"
+version="$(sed -n 's/^version = "\([^"]*\)"/\1/p' "$project_dir/Cargo.toml")"
+if [[ "$tag" != "v$version" ]]; then
+  echo "tag $tag does not match workspace version $version" >&2
+  exit 1
+fi
+if ! grep -q "^## $version$" "$project_dir/CHANGELOG.md"; then
+  echo "CHANGELOG.md must contain a finalized '## $version' heading" >&2
+  exit 1
+fi
+
+metadata="$(cargo metadata --manifest-path "$project_dir/Cargo.toml" --locked --no-deps --format-version 1)"
+for package in niri-zvim-core niri-zvim niri-zvim-zellij; do
+  package_version="$(jq -r --arg package "$package" \
+    '.packages[] | select(.name == $package) | .version' <<<"$metadata")"
+  if [[ "$package_version" != "$version" ]]; then
+    echo "$package has version $package_version; expected $version" >&2
+    exit 1
+  fi
+done
+
+if git -C "$project_dir" rev-parse --verify --quiet "refs/tags/$tag" >/dev/null; then
+  tag_commit="$(git -C "$project_dir" rev-list -n 1 "$tag")"
+  head_commit="$(git -C "$project_dir" rev-parse HEAD)"
+  if [[ "$tag_commit" != "$head_commit" ]]; then
+    echo "$tag does not point at HEAD" >&2
+    exit 1
+  fi
+fi
+
+echo "Release metadata is ready for $tag."

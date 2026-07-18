@@ -22,3 +22,11 @@ bench-live:
 # Run the complete automated and live desktop test suites.
 test:
     ./scripts/test
+
+# Build and verify a checksumed release archive for this Linux host.
+package:
+    ./scripts/package-release
+
+# Validate release metadata against a version tag such as v0.2.0.
+release-check tag:
+    ./scripts/release-check {{tag}}

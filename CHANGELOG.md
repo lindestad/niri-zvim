@@ -20,6 +20,8 @@
   retaining the last valid configuration after a rejected edit.
 - Install an owned Neovim adapter copy independent of the source checkout,
   support prebuilt release payloads, and stop changing Ghostty service state.
+- Build, checksum, install-test, and publish complete GitHub release archives
+  from finalized version tags while keeping crates.io publication explicit.
 
 ## 0.1.1
 

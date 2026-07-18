@@ -1,0 +1,62 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if (($# != 1)); then
+  echo "usage: scripts/verify-release-bundle <archive.tar.gz>" >&2
+  exit 2
+fi
+
+archive="$(realpath "$1")"
+checksum="$archive.sha256"
+for command in find mktemp realpath sha256sum tar; do
+  command -v "$command" >/dev/null || {
+    echo "$command is required" >&2
+    exit 1
+  }
+done
+[[ -f "$archive" ]] || {
+  echo "archive not found: $archive" >&2
+  exit 1
+}
+[[ -f "$checksum" ]] || {
+  echo "checksum not found: $checksum" >&2
+  exit 1
+}
+
+(
+  cd "$(dirname "$archive")"
+  sha256sum --check "$(basename "$checksum")"
+)
+
+test_dir="$(mktemp -d "${TMPDIR:-/tmp}/niri-zvim-release-check.XXXXXX")"
+cleanup() {
+  rm -rf -- "$test_dir"
+}
+trap cleanup EXIT
+tar --directory "$test_dir" --extract --gzip --file "$archive"
+mapfile -t roots < <(find "$test_dir" -mindepth 1 -maxdepth 1 -type d)
+if ((${#roots[@]} != 1)); then
+  echo "release archive must contain exactly one root directory" >&2
+  exit 1
+fi
+root="${roots[0]}"
+home="$test_dir/home"
+config_home="$test_dir/config"
+data_home="$test_dir/data"
+mkdir -p "$home"
+
+HOME="$home" XDG_CONFIG_HOME="$config_home" XDG_DATA_HOME="$data_home" \
+  "$root/install" --no-service >/dev/null
+
+"$home/.local/bin/niri-zvim" --version >/dev/null
+"$home/.local/bin/niri-zvimd" --version >/dev/null
+[[ -s "$config_home/zellij/plugins/niri-zvim.wasm" ]]
+[[ -f "$config_home/niri-zvim/config.json" ]]
+[[ -f "$config_home/systemd/user/niri-zvim.service" ]]
+[[ -f "$data_home/niri-zvim/nvim/lua/niri-zvim/init.lua" ]]
+[[ -L "$data_home/nvim/site/lua/niri-zvim" ]]
+[[ -f "$root/README.md" ]]
+[[ -f "$root/CHANGELOG.md" ]]
+[[ -f "$root/LICENSE" ]]
+
+echo "Verified $(basename "$archive")"

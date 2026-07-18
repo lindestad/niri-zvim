@@ -1,0 +1,61 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Install Rust tooling
+        run: >-
+          rustup toolchain install 1.97.1 --profile minimal
+          --component clippy,rustfmt --target wasm32-wasip1
+      - name: Select Rust 1.97.1
+        run: rustup override set 1.97.1
+      - name: Install Neovim 0.12.4
+        run: |
+          archive="$RUNNER_TEMP/nvim-linux-x86_64.tar.gz"
+          curl --fail --location --silent --show-error \
+            --output "$archive" \
+            https://github.com/neovim/neovim/releases/download/v0.12.4/nvim-linux-x86_64.tar.gz
+          tar --directory "$RUNNER_TEMP" --extract --gzip --file "$archive"
+          echo "$RUNNER_TEMP/nvim-linux-x86_64/bin" >> "$GITHUB_PATH"
+      - name: Install ShellCheck
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes shellcheck
+      - name: Run release checks
+        run: |
+          ./scripts/check
+          ./scripts/release-check "$GITHUB_REF_NAME"
+      - name: Build release bundle
+        run: ./scripts/package-release "$RUNNER_TEMP/release"
+      - name: Write release notes
+        run: ./scripts/release-notes "${GITHUB_REF_NAME#v}" > "$RUNNER_TEMP/release-notes.md"
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" "$RUNNER_TEMP/release"/* --clobber
+            gh release edit "$GITHUB_REF_NAME" \
+              --title "niri-zvim $GITHUB_REF_NAME" \
+              --notes-file "$RUNNER_TEMP/release-notes.md"
+          else
+            gh release create "$GITHUB_REF_NAME" "$RUNNER_TEMP/release"/* \
+              --verify-tag \
+              --title "niri-zvim $GITHUB_REF_NAME" \
+              --notes-file "$RUNNER_TEMP/release-notes.md"
+          fi

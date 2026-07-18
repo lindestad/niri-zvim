@@ -253,3 +253,13 @@ for methodology and interpretation limits.
 See
 [the changelog](https://github.com/lindestad/niri-zvim/blob/main/CHANGELOG.md)
 for release notes.
+
+## Release process
+
+Finalize the version heading in `CHANGELOG.md`, run `just test`, and validate
+the tag metadata with `just release-check vX.Y.Z`. Publish `niri-zvim-core`
+before `niri-zvim` on crates.io, then create and push the matching annotated
+tag. The tag workflow repeats the complete nonvisual checks, builds and
+self-tests a host-targeted release archive, writes its SHA-256 file, and
+creates the GitHub release from the matching changelog section. Crates.io
+publishing is intentionally explicit and is not performed by GitHub Actions.

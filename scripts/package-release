@@ -1,0 +1,97 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+project_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+output_dir="${1:-$project_dir/dist}"
+
+if (($# > 1)); then
+  echo "usage: scripts/package-release [output-directory]" >&2
+  exit 2
+fi
+for command in cargo git gzip install mktemp rustc rustup sed sha256sum tar; do
+  command -v "$command" >/dev/null || {
+    echo "$command is required" >&2
+    exit 1
+  }
+done
+
+version="$(sed -n 's/^version = "\([^"]*\)"/\1/p' "$project_dir/Cargo.toml")"
+host="$(rustc -vV | sed -n 's/^host: //p')"
+archive_name="niri-zvim-$version-$host"
+archive="$output_dir/$archive_name.tar.gz"
+checksum="$archive.sha256"
+stage="$(mktemp -d "${TMPDIR:-/tmp}/niri-zvim-release.XXXXXX")"
+root="$stage/$archive_name"
+cleanup() {
+  rm -rf -- "$stage"
+}
+trap cleanup EXIT
+
+mkdir -p \
+  "$output_dir" \
+  "$root/lib" \
+  "$root/payload/bin" \
+  "$root/payload/config" \
+  "$root/payload/nvim/lua/niri-zvim" \
+  "$root/payload/nvim/plugin" \
+  "$root/payload/systemd" \
+  "$root/payload/zellij"
+
+rustup target add wasm32-wasip1
+cargo build \
+  --manifest-path "$project_dir/Cargo.toml" \
+  --locked \
+  --release \
+  --package niri-zvim \
+  --target-dir "$project_dir/target/release-bundle"
+cargo build \
+  --manifest-path "$project_dir/Cargo.toml" \
+  --locked \
+  --release \
+  --package niri-zvim-zellij \
+  --target wasm32-wasip1
+
+install -m 0755 "$project_dir/scripts/install" "$root/install"
+install -m 0644 "$project_dir/scripts/lib/install.sh" "$root/lib/install.sh"
+install -m 0644 "$project_dir/README.md" "$root/README.md"
+install -m 0644 "$project_dir/CHANGELOG.md" "$root/CHANGELOG.md"
+install -m 0644 "$project_dir/LICENSE" "$root/LICENSE"
+install -m 0755 \
+  "$project_dir/target/release-bundle/release/niri-zvim" \
+  "$root/payload/bin/niri-zvim"
+install -m 0755 \
+  "$project_dir/target/release-bundle/release/niri-zvimd" \
+  "$root/payload/bin/niri-zvimd"
+install -m 0644 \
+  "$project_dir/target/wasm32-wasip1/release/niri-zvim-zellij.wasm" \
+  "$root/payload/zellij/niri-zvim.wasm"
+install -m 0644 \
+  "$project_dir/nvim/lua/niri-zvim/init.lua" \
+  "$root/payload/nvim/lua/niri-zvim/init.lua"
+install -m 0644 \
+  "$project_dir/nvim/plugin/niri-zvim.lua" \
+  "$root/payload/nvim/plugin/niri-zvim.lua"
+install -m 0644 \
+  "$project_dir/systemd/niri-zvim.service" \
+  "$root/payload/systemd/niri-zvim.service"
+install -m 0644 \
+  "$project_dir/config/config.json" \
+  "$root/payload/config/config.json"
+
+epoch="$(git -C "$project_dir" show -s --format=%ct HEAD)"
+tar \
+  --directory "$stage" \
+  --sort=name \
+  --mtime="@$epoch" \
+  --owner=0 \
+  --group=0 \
+  --numeric-owner \
+  --create \
+  "$archive_name" | gzip -n >"$archive"
+(
+  cd "$output_dir"
+  sha256sum "$(basename "$archive")" >"$(basename "$checksum")"
+)
+
+"$project_dir/scripts/verify-release-bundle" "$archive"
+printf 'Created %s\nCreated %s\n' "$archive" "$checksum"

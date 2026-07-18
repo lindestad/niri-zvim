@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+project_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+if (($# != 1)); then
+  echo "usage: scripts/release-notes <version>" >&2
+  exit 2
+fi
+
+version="$1"
+awk -v heading="## $version" '
+  $0 == heading { found = 1; next }
+  found && /^## / { exit }
+  found { print }
+  END { if (!found) exit 1 }
+' "$project_dir/CHANGELOG.md"
