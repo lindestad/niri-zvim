@@ -16,7 +16,7 @@ work, but have not been validated and should not be presented as supported.
 | Terminal for direct Neovim | Any terminal that delivers terminal-focus events to Neovim |
 | Terminal for Zellij | Ghostty GTK 1.3 is tested; 0.2 accepts configured Wayland app IDs and title separators |
 | Rust source build | Rust 1.97.1 or newer with `wasm32-wasip1` available through rustup |
-| Service manager | systemd user services through the 0.1 installer |
+| Service manager | systemd user services through the complete installer |
 
 This project intentionally follows the latest stable niri, Zellij, Neovim, and
 Rust releases rather than maintaining a broad compatibility range. Rust 1.97.1
@@ -24,9 +24,10 @@ is the floor because it contains the fix for an LLVM miscompilation present in
 earlier toolchains. The release versions above are rechecked when each
 niri-zvim release is prepared.
 
-The daemon only relies on niri IPC and a Unix socket. Systemd and Ghostty are
-requirements of the current complete installation and discovery path, not of
-the routing graph itself. The daemon and adapters require either the standard
+The daemon only relies on niri IPC and a Unix socket. Systemd is a requirement
+of the complete installer, not of the routing graph itself. Ghostty is the
+tested discovery default rather than an unconditional install-time service
+dependency. The daemon and adapters require either the standard
 `XDG_RUNTIME_DIR` environment or an explicit absolute `NIRI_ZVIM_SOCKET`;
 they do not create a socket in the shared temporary directory.
 
@@ -98,7 +99,7 @@ Neovim's user site.
 - concurrently created attachments whose client and window creation orders do
   not correspond;
 - renamed Zellij sessions; and
-- non-systemd installation through the 0.1 installer.
+- automatic service setup without a systemd user manager.
 
 Configurable terminal discovery and multiple attached clients are implemented
 for 0.2 within the identity assumptions above.

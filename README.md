@@ -27,25 +27,31 @@ for the protocol and invariants, and
 [the live-testing documentation](https://github.com/lindestad/niri-zvim/blob/main/docs/live-testing.md)
 for the desktop race tests and lessons from their fixtures.
 
-## Install from source
+## Install
 
-The complete 0.1 integration requires niri 26.04, Zellij 0.44.3, Neovim
+The complete integration requires niri 26.04, Zellij 0.44.3, Neovim
 0.12.4, Ghostty's GTK build, Rust 1.97.1 or newer, Just, and systemd user
-services. Install the binaries, adapters, and daemon with:
+services. From a source checkout, install the binaries, adapters, and daemon
+with:
 
     just install
 
 The installer puts the client and daemon in `~/.local/bin`, the Zellij plugin
-in `~/.config/zellij/plugins`, and the Neovim adapter in its user site runtime.
-It creates `~/.config/niri-zvim/config.json` when missing, enables
-`niri-zvim.service` immediately, and enables Ghostty's packaged user service
-for the next graphical login. The Neovim files are symlinked to this checkout,
-so the checkout must remain in place. These side effects are part of the 0.1
-source installer and will be removed from the general installer in 0.2.
+in `~/.config/zellij/plugins`, and an owned copy of the Neovim adapter under
+`~/.local/share/niri-zvim`. It links that stable copy into Neovim's user site,
+so the source checkout can be removed afterward. It creates
+`~/.config/niri-zvim/config.json` only when missing and starts the systemd user
+service. Pass `--no-service` to install the files without enabling or
+restarting the service.
+
+GitHub release archives contain the same complete integration prebuilt for
+their named Linux target and do not require Rust. Extract an archive, verify
+its adjacent `.sha256` file, and run its `install` script.
 
 Once published, `cargo install --locked niri-zvim` installs only the native
 client and daemon. It does not install the Zellij WASM plugin, Neovim adapter,
-configuration, or service; `just install` is currently the complete path.
+configuration, or service; the source or release-archive installer is the
+complete path.
 
 Enable the installed Neovim adapter explicitly in your configuration:
 

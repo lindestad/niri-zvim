@@ -18,6 +18,8 @@
   the complete effective configuration.
 - Reload valid navigation and discovery configuration changes at runtime while
   retaining the last valid configuration after a rejected edit.
+- Install an owned Neovim adapter copy independent of the source checkout,
+  support prebuilt release payloads, and stop changing Ghostty service state.
 
 ## 0.1.1
 

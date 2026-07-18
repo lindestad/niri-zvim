@@ -27,3 +27,52 @@ if replace_managed_symlink "$test_dir/first" "$destination" 2>/dev/null; then
 fi
 [[ -d "$destination" && ! -L "$destination" ]]
 [[ ! -e "$destination/first" ]]
+
+bundle="$test_dir/bundle"
+home="$test_dir/home"
+config_home="$test_dir/config"
+data_home="$test_dir/data"
+mkdir -p \
+  "$bundle/lib" \
+  "$bundle/payload/bin" \
+  "$bundle/payload/config" \
+  "$bundle/payload/nvim/lua/niri-zvim" \
+  "$bundle/payload/nvim/plugin" \
+  "$bundle/payload/systemd" \
+  "$bundle/payload/zellij" \
+  "$home"
+install -m 0755 "$project_dir/scripts/install" "$bundle/install"
+install -m 0644 "$project_dir/scripts/lib/install.sh" "$bundle/lib/install.sh"
+install -m 0755 "$project_dir/tests/fixtures/terminal" "$bundle/payload/bin/niri-zvim"
+install -m 0755 "$project_dir/tests/fixtures/terminal" "$bundle/payload/bin/niri-zvimd"
+install -m 0644 "$project_dir/config/config.json" "$bundle/payload/config/config.json"
+install -m 0644 \
+  "$project_dir/nvim/lua/niri-zvim/init.lua" \
+  "$bundle/payload/nvim/lua/niri-zvim/init.lua"
+install -m 0644 \
+  "$project_dir/nvim/plugin/niri-zvim.lua" \
+  "$bundle/payload/nvim/plugin/niri-zvim.lua"
+install -m 0644 \
+  "$project_dir/systemd/niri-zvim.service" \
+  "$bundle/payload/systemd/niri-zvim.service"
+install -m 0644 /dev/null "$bundle/payload/zellij/niri-zvim.wasm"
+
+HOME="$home" XDG_CONFIG_HOME="$config_home" XDG_DATA_HOME="$data_home" \
+  "$bundle/install" --no-service >/dev/null
+
+[[ -x "$home/.local/bin/niri-zvim" ]]
+[[ -f "$config_home/zellij/plugins/niri-zvim.wasm" ]]
+[[ -f "$config_home/systemd/user/niri-zvim.service" ]]
+[[ -f "$config_home/niri-zvim/config.json" ]]
+[[ -f "$data_home/niri-zvim/nvim/lua/niri-zvim/init.lua" ]]
+[[ -L "$data_home/nvim/site/lua/niri-zvim" ]]
+[[ "$(readlink "$data_home/nvim/site/lua/niri-zvim")" == \
+  "$data_home/niri-zvim/nvim/lua/niri-zvim" ]]
+[[ -L "$data_home/nvim/site/plugin/niri-zvim.lua" ]]
+[[ "$(readlink "$data_home/nvim/site/plugin/niri-zvim.lua")" == \
+  "$data_home/niri-zvim/nvim/plugin/niri-zvim.lua" ]]
+
+printf '%s\n' '{"preserved":true}' >"$config_home/niri-zvim/config.json"
+HOME="$home" XDG_CONFIG_HOME="$config_home" XDG_DATA_HOME="$data_home" \
+  "$bundle/install" --no-service >/dev/null
+grep -q '"preserved":true' "$config_home/niri-zvim/config.json"

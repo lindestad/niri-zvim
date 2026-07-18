@@ -1,70 +1,116 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-project_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [[ -f "$script_dir/../Cargo.toml" ]]; then
+  project_dir="$(cd "$script_dir/.." && pwd)"
+  install_source="source"
+  helper="$project_dir/scripts/lib/install.sh"
+elif [[ -d "$script_dir/payload" ]]; then
+  project_dir="$script_dir"
+  install_source="bundle"
+  helper="$project_dir/lib/install.sh"
+else
+  echo "could not find a source checkout or release payload" >&2
+  exit 1
+fi
 # shellcheck source=scripts/lib/install.sh
-source "$project_dir/scripts/lib/install.sh"
+source "$helper"
 config_home="${XDG_CONFIG_HOME:-$HOME/.config}"
 data_home="${XDG_DATA_HOME:-$HOME/.local/share}"
 bin_dir="$HOME/.local/bin"
 zellij_plugin_dir="$config_home/zellij/plugins"
 nvim_site_dir="$data_home/nvim/site"
+nvim_install_dir="$data_home/niri-zvim/nvim"
 systemd_dir="$config_home/systemd/user"
 niri_zvim_config_dir="$config_home/niri-zvim"
+start_service=true
 
-command -v cargo >/dev/null || {
-  echo "cargo is required" >&2
-  exit 1
-}
-command -v rustup >/dev/null || {
-  echo "rustup is required to build the Zellij WASM plugin" >&2
-  exit 1
-}
+if (($# > 1)); then
+  echo "usage: $0 [--no-service]" >&2
+  exit 2
+fi
+if (($# == 1)); then
+  if [[ "$1" != "--no-service" ]]; then
+    echo "usage: $0 [--no-service]" >&2
+    exit 2
+  fi
+  start_service=false
+fi
 
-rustup target add wasm32-wasip1
-cargo build \
-  --manifest-path "$project_dir/Cargo.toml" \
-  --locked \
-  --release \
-  --package niri-zvim \
-  --target-dir "$project_dir/target/native"
-cargo build \
-  --manifest-path "$project_dir/Cargo.toml" \
-  --locked \
-  --release \
-  --package niri-zvim-zellij \
-  --target wasm32-wasip1
+if [[ "$install_source" == source ]]; then
+  command -v cargo >/dev/null || {
+    echo "cargo is required" >&2
+    exit 1
+  }
+  command -v rustup >/dev/null || {
+    echo "rustup is required to build the Zellij WASM plugin" >&2
+    exit 1
+  }
+
+  rustup target add wasm32-wasip1
+  cargo build \
+    --manifest-path "$project_dir/Cargo.toml" \
+    --locked \
+    --release \
+    --package niri-zvim \
+    --target-dir "$project_dir/target/native"
+  cargo build \
+    --manifest-path "$project_dir/Cargo.toml" \
+    --locked \
+    --release \
+    --package niri-zvim-zellij \
+    --target wasm32-wasip1
+
+  client_source="$project_dir/target/native/release/niri-zvim"
+  daemon_source="$project_dir/target/native/release/niri-zvimd"
+  zellij_source="$project_dir/target/wasm32-wasip1/release/niri-zvim-zellij.wasm"
+  nvim_lua_source="$project_dir/nvim/lua/niri-zvim/init.lua"
+  nvim_plugin_source="$project_dir/nvim/plugin/niri-zvim.lua"
+  service_source="$project_dir/systemd/niri-zvim.service"
+  config_source="$project_dir/config/config.json"
+else
+  client_source="$project_dir/payload/bin/niri-zvim"
+  daemon_source="$project_dir/payload/bin/niri-zvimd"
+  zellij_source="$project_dir/payload/zellij/niri-zvim.wasm"
+  nvim_lua_source="$project_dir/payload/nvim/lua/niri-zvim/init.lua"
+  nvim_plugin_source="$project_dir/payload/nvim/plugin/niri-zvim.lua"
+  service_source="$project_dir/payload/systemd/niri-zvim.service"
+  config_source="$project_dir/payload/config/config.json"
+fi
 
 mkdir -p \
   "$bin_dir" \
   "$zellij_plugin_dir" \
   "$nvim_site_dir/lua" \
   "$nvim_site_dir/plugin" \
+  "$nvim_install_dir/lua/niri-zvim" \
+  "$nvim_install_dir/plugin" \
   "$niri_zvim_config_dir" \
   "$systemd_dir"
-install -m 0755 "$project_dir/target/native/release/niri-zvim" "$bin_dir/niri-zvim"
-install -m 0755 "$project_dir/target/native/release/niri-zvimd" "$bin_dir/niri-zvimd"
-install -m 0644 \
-  "$project_dir/target/wasm32-wasip1/release/niri-zvim-zellij.wasm" \
-  "$zellij_plugin_dir/niri-zvim.wasm"
-install -m 0644 "$project_dir/systemd/niri-zvim.service" "$systemd_dir/niri-zvim.service"
+install -m 0755 "$client_source" "$bin_dir/niri-zvim"
+install -m 0755 "$daemon_source" "$bin_dir/niri-zvimd"
+install -m 0644 "$zellij_source" "$zellij_plugin_dir/niri-zvim.wasm"
+install -m 0644 "$nvim_lua_source" "$nvim_install_dir/lua/niri-zvim/init.lua"
+install -m 0644 "$nvim_plugin_source" "$nvim_install_dir/plugin/niri-zvim.lua"
+install -m 0644 "$service_source" "$systemd_dir/niri-zvim.service"
 if [[ ! -e "$niri_zvim_config_dir/config.json" ]]; then
-  install -m 0644 "$project_dir/config/config.json" "$niri_zvim_config_dir/config.json"
+  install -m 0644 "$config_source" "$niri_zvim_config_dir/config.json"
 fi
 replace_managed_symlink \
-  "$project_dir/nvim/lua/niri-zvim" \
+  "$nvim_install_dir/lua/niri-zvim" \
   "$nvim_site_dir/lua/niri-zvim"
 replace_managed_symlink \
-  "$project_dir/nvim/plugin/niri-zvim.lua" \
+  "$nvim_install_dir/plugin/niri-zvim.lua" \
   "$nvim_site_dir/plugin/niri-zvim.lua"
 
-if command -v systemctl >/dev/null; then
+if [[ "$start_service" == true ]] && command -v systemctl >/dev/null &&
+  systemctl --user show-environment >/dev/null 2>&1; then
   systemctl --user daemon-reload
   systemctl --user enable niri-zvim.service
   systemctl --user restart niri-zvim.service
-  if systemctl --user cat app-com.mitchellh.ghostty.service >/dev/null 2>&1; then
-    systemctl --user enable app-com.mitchellh.ghostty.service
-  fi
+elif [[ "$start_service" == true ]]; then
+  echo "No systemd user manager found; enable niri-zvim.service manually."
 fi
 
 echo "Installed niri-zvim."
