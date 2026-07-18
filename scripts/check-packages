@@ -4,7 +4,7 @@ set -euo pipefail
 project_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$project_dir"
 
-for command in cargo cmp grep sed; do
+for command in cargo cmp git grep sed; do
   command -v "$command" >/dev/null || {
     echo "$command is required" >&2
     exit 1
