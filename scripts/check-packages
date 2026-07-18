@@ -4,23 +4,30 @@ set -euo pipefail
 project_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$project_dir"
 
-for command in cargo cmp git grep sed; do
+for command in cargo cmp git grep mktemp sed; do
   command -v "$command" >/dev/null || {
     echo "$command is required" >&2
     exit 1
   }
 done
 
+package_target="$(mktemp -d "${TMPDIR:-/tmp}/niri-zvim-package-check.XXXXXX")"
+cleanup_package_target() {
+  rm -rf -- "$package_target"
+}
+trap cleanup_package_target EXIT
+
 package_flags=()
 if [[ -n "$(git status --porcelain)" ]]; then
   package_flags+=(--allow-dirty)
 fi
 cargo package --workspace --exclude niri-zvim-zellij --locked \
+  --target-dir "$package_target" \
   "${package_flags[@]}"
 
 version="$(sed -n 's/^version = "\([^"]*\)"/\1/p' Cargo.toml)"
-core_package="$project_dir/target/package/niri-zvim-core-$version"
-app_package="$project_dir/target/package/niri-zvim-$version"
+core_package="$package_target/package/niri-zvim-core-$version"
+app_package="$package_target/package/niri-zvim-$version"
 
 for package in "$core_package" "$app_package"; do
   [[ -f "$package/LICENSE" ]] || {
