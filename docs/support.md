@@ -1,0 +1,82 @@
+# Support and compatibility
+
+## Release status
+
+Version 0.1 is a developer preview of the current architecture, not yet a
+general terminal-navigation package. It is supported as a complete integration
+on the stack below. Other combinations may work, but have not been validated
+and should not be presented as supported.
+
+| Component | 0.1 support |
+| --- | --- |
+| Operating system | Linux in a running niri Wayland session |
+| niri | 26.04, using `niri-ipc` 26.4.0 |
+| Zellij | 0.44.3 |
+| Neovim | 0.10 or newer; 0.12 is the tested version |
+| Terminal for direct Neovim | Any terminal that delivers terminal-focus events to Neovim |
+| Terminal for Zellij | Ghostty GTK 1.3 with the standard Wayland app ID and Zellij-managed title |
+| Rust source build | Rust 1.88 or newer with `wasm32-wasip1` available through rustup |
+| Service manager | systemd user services through the 0.1 installer |
+
+The daemon only relies on niri IPC and a Unix socket. Systemd and Ghostty are
+requirements of the current complete installation and discovery path, not of
+the routing graph itself.
+
+## Zellij discovery assumptions
+
+The daemon currently associates a niri window with a Zellij session by
+inference. All of the following must be true:
+
+- niri reports the window app ID as `com.mitchellh.ghostty`;
+- niri reports the Wayland window title as either `<session>` or
+  `<session> | <command>`;
+- a same-named Zellij session socket exists;
+- the session has one unambiguous connected terminal client;
+- Zellij session metadata is available for the supported fallback refresh
+  path; and
+- the user has approved the plugin's requested Zellij permissions.
+
+The title is compositor metadata, not a requirement to show a decorated title
+bar. Ghostty's window decorations may remain hidden. A static custom terminal
+title, however, removes the session identity used by 0.1 discovery.
+
+The plugin asks for `ReadApplicationState`, `ChangeApplicationState`,
+`ReadCliPipes`, and `ReadSessionEnvironmentVariables`. It hides itself after
+permission is granted. Normal navigation uses the persistent plugin pipe;
+session metadata and Zellij CLI queries are reconciliation fallbacks rather
+than work performed for every keypress.
+
+One daemon bridge is currently created per session name and is bound to the
+first matching niri window. Multiple Ghostty windows or multiple attached
+terminal clients for the same Zellij session are therefore unsupported.
+Renaming a running session after discovery is also unsupported.
+
+## Neovim assumptions
+
+The Neovim adapter supports normal windows in the current tab. Floating windows
+are intentionally excluded from its directional graph.
+
+For Neovim running directly in a terminal, `FocusGained` and `FocusLost` tell
+the adapter whether it may claim the focused niri window. This makes direct
+Neovim independent of Ghostty in principle, but the terminal and its settings
+must deliver focus events.
+
+Inside Zellij, the adapter uses `ZELLIJ_SESSION_NAME` and `ZELLIJ_PANE_ID` to
+attach its window graph beneath the containing pane. This path inherits the
+Zellij discovery restrictions above.
+
+The 0.1 installer loads the adapter automatically for every Neovim instance
+and retries the daemon socket while Neovim remains open. An explicit setup and
+opt-out interface is planned for 0.2.
+
+## Known unsupported configurations
+
+- Vim rather than Neovim;
+- automatic Zellij discovery in terminals other than Ghostty;
+- more than one niri window attached to the same Zellij session;
+- ambiguous multi-client Zellij sessions;
+- renamed Zellij sessions; and
+- non-systemd installation through the 0.1 installer.
+
+The 0.2 work is intended to replace terminal-specific inference with
+configurable discovery first, then an explicit window/session identity design.

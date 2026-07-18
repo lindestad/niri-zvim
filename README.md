@@ -3,6 +3,11 @@
 State-synchronized directional navigation across niri windows, Zellij panes,
 and Neovim splits.
 
+Version 0.1 is a developer preview for the stack it was built and tested on.
+Zellij discovery is currently specific to Ghostty, and the source installer is
+intended for people who are comfortable inspecting and maintaining a local
+checkout. See [support and compatibility](docs/support.md) before installing.
+
 niri-zvimd keeps a live graph of focus and topology. Neovim and a background
 Zellij plugin push changes to it; the niri-zvim command sends one-byte
 navigation requests from niri key bindings. A request is routed directly to
@@ -17,10 +22,11 @@ See [docs/architecture.md](docs/architecture.md) for the protocol and
 invariants, and [docs/live-testing.md](docs/live-testing.md) for the desktop
 race tests and lessons from their fixtures.
 
-## Install
+## Install from source
 
-Requirements are Niri, Zellij 0.44, Neovim 0.10 or newer, Ghostty, Rust, Just,
-and systemd user services. Install the binaries, adapters, and daemon with:
+The complete 0.1 integration requires niri 26.04, Zellij 0.44.3, Neovim 0.10
+or newer, Ghostty's GTK build, Rust 1.88 or newer, Just, and systemd user
+services. Install the binaries, adapters, and daemon with:
 
     just install
 
@@ -28,7 +34,13 @@ The installer puts the client and daemon in `~/.local/bin`, the Zellij plugin
 in `~/.config/zellij/plugins`, and the Neovim adapter in its user site runtime.
 It creates `~/.config/niri-zvim/config.json` when missing, enables
 `niri-zvim.service` immediately, and enables Ghostty's packaged user service
-for the next graphical login.
+for the next graphical login. The Neovim files are symlinked to this checkout,
+so the checkout must remain in place. These side effects are part of the 0.1
+source installer and will be removed from the general installer in 0.2.
+
+Once published, `cargo install --locked niri-zvim` installs only the native
+client and daemon. It does not install the Zellij WASM plugin, Neovim adapter,
+configuration, or service; `just install` is currently the complete path.
 
 Zellij requires a one-time interactive permission approval. From any Zellij
 session, run:
@@ -48,6 +60,12 @@ Bind the compositor keys to the client:
 
 For systemd-managed Ghostty, launch terminal windows with `ghostty +new-window`.
 Do not disable Ghostty's GTK single-instance mode.
+
+The Zellij bridge does not require a visible title bar. It reads the Wayland
+window title reported by niri. The supported setup expects Ghostty's app ID to
+be `com.mitchellh.ghostty` and the title to be either the Zellij session name
+or `<session> | <command>`. Hiding client-side decorations is fine; overriding
+the terminal title with a static value prevents discovery.
 
 ## Navigation modes
 
@@ -124,3 +142,5 @@ client. `just bench-live` separately compares native and daemon-triggered Niri,
 Zellij, and Neovim focus convergence on the running desktop. See
 [docs/benchmarking.md](docs/benchmarking.md) for methodology and interpretation
 limits.
+
+See [CHANGELOG.md](CHANGELOG.md) for release notes.
