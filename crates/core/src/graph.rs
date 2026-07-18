@@ -89,6 +89,18 @@ impl NavigationGraph {
         self.focused_niri_window
     }
 
+    pub fn niri_window_count(&self) -> usize {
+        self.windows.len()
+    }
+
+    pub fn zellij_states(&self) -> impl Iterator<Item = &ZellijClientState> {
+        self.zellij.values()
+    }
+
+    pub fn nvim_instances(&self) -> impl Iterator<Item = &NvimInstance> {
+        self.nvim.values()
+    }
+
     pub fn predict_zellij_focus(&mut self, client: &ZellijClient, direction: Direction) -> bool {
         self.move_zellij_prediction(client, direction)
     }

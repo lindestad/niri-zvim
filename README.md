@@ -104,6 +104,19 @@ Restart `niri-zvim.service` after changing the active mode. Niri fallthrough
 actions are sent over the daemon's persistent Niri IPC socket; no `niri msg`
 process is launched on a keypress.
 
+## Status
+
+Query the running daemon and its current graph with:
+
+    niri-zvim status
+    niri-zvim status --json
+
+Status reports the daemon and protocol versions, uptime, active Niri mode,
+socket, current Niri focus, navigation sequence, pending commands, and every
+known Zellij client and Neovim instance. A disconnected entry means topology
+remains in the graph but its executor is no longer attached; this is useful
+diagnostic state rather than a successful health check.
+
 ## Development
 
 Run formatting, unit and integration tests, native and WASM Clippy, ShellCheck,

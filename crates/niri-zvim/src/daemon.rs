@@ -5,18 +5,19 @@ use std::{
     os::unix::fs::PermissionsExt,
     path::Path,
     sync::Arc,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use anyhow::Context;
 use niri_zvim_core::{
-    ADAPTER_MAGIC, AdapterMessage, CONTROL_MAGIC, DaemonMessage, Direction, NavigationAction,
-    NavigationGraph, NiriWindow, PROTOCOL_VERSION, ProtocolMessage, ZellijClient,
+    ADAPTER_MAGIC, AdapterMessage, CONTROL_MAGIC, ControlResponse, DaemonMessage, DaemonStatus,
+    Direction, NavigationAction, NavigationGraph, NiriStatus, NiriWindow, NvimStatus,
+    PROTOCOL_VERSION, ProtocolMessage, STATUS_OPCODE, ZellijClient, ZellijStatus,
 };
 use tokio::{
     io::{AsyncBufRead, AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader},
     net::{UnixListener, UnixStream},
-    sync::{Semaphore, mpsc},
+    sync::{Semaphore, mpsc, oneshot},
     time::timeout,
 };
 use tracing::{debug, info, warn};
@@ -56,6 +57,9 @@ pub(crate) enum DaemonEvent {
     ZellijBridgeStopped {
         session: String,
     },
+    Status {
+        response: oneshot::Sender<DaemonStatus>,
+    },
 }
 
 struct Daemon {
@@ -67,10 +71,13 @@ struct Daemon {
     pending_niri: VecDeque<PendingNiriNavigation>,
     pending_nvim: BTreeMap<String, VecDeque<PendingNavigation>>,
     pending_zellij: BTreeMap<ZellijClient, VecDeque<PendingNavigation>>,
+    active_mode: String,
+    socket_path: String,
+    started_at: Instant,
 }
 
 impl Daemon {
-    fn new(niri: NiriExecutor) -> Self {
+    fn new(niri: NiriExecutor, active_mode: String, socket_path: String) -> Self {
         Self {
             graph: NavigationGraph::default(),
             niri,
@@ -80,6 +87,9 @@ impl Daemon {
             pending_niri: VecDeque::new(),
             pending_nvim: BTreeMap::new(),
             pending_zellij: BTreeMap::new(),
+            active_mode,
+            socket_path,
+            started_at: Instant::now(),
         }
     }
 
@@ -106,6 +116,62 @@ impl Daemon {
                 self.pending_zellij
                     .retain(|client, _| client.session != session);
             }
+            DaemonEvent::Status { response } => {
+                let _ = response.send(self.status());
+            }
+        }
+    }
+
+    fn status(&self) -> DaemonStatus {
+        let zellij = self
+            .graph
+            .zellij_states()
+            .map(|state| ZellijStatus {
+                session: state.client.session.clone(),
+                client_id: state.client.client_id,
+                niri_window_id: state.niri_window_id,
+                focused_pane: state.focused_pane,
+                pane_count: state.pane_neighbors.len(),
+                connected: self
+                    .zellij
+                    .get(&state.client)
+                    .is_some_and(|sink| !sink.is_closed()),
+                pending_navigations: self
+                    .pending_zellij
+                    .get(&state.client)
+                    .map_or(0, VecDeque::len),
+            })
+            .collect();
+        let nvim = self
+            .graph
+            .nvim_instances()
+            .map(|state| NvimStatus {
+                id: state.id.clone(),
+                parent: state.parent.clone(),
+                terminal_focused: state.terminal_focused,
+                focused_window: state.focused_window,
+                window_count: state.window_neighbors.len(),
+                connected: self
+                    .nvim
+                    .get(&state.id)
+                    .is_some_and(|sink| !sink.is_closed()),
+                pending_navigations: self.pending_nvim.get(&state.id).map_or(0, VecDeque::len),
+            })
+            .collect();
+        DaemonStatus {
+            version: env!("CARGO_PKG_VERSION").into(),
+            protocol_version: PROTOCOL_VERSION,
+            uptime_seconds: self.started_at.elapsed().as_secs(),
+            active_mode: self.active_mode.clone(),
+            socket_path: self.socket_path.clone(),
+            navigation_sequence: self.sequence,
+            niri: NiriStatus {
+                window_count: self.graph.niri_window_count(),
+                focused_window: self.graph.niri_focus(),
+                pending_navigations: self.pending_niri.len(),
+            },
+            zellij,
+            nvim,
         }
     }
 
@@ -271,7 +337,9 @@ impl Daemon {
 }
 
 pub async fn run_daemon() -> anyhow::Result<()> {
-    let niri_mode = Config::load()?.active_mode()?;
+    let config = Config::load()?;
+    let active_mode = config.active_mode_name().to_owned();
+    let niri_mode = config.active_mode()?;
     info!(?niri_mode, "loaded Niri navigation mode");
     let path = socket_path()?;
     remove_stale_socket(&path)?;
@@ -284,11 +352,11 @@ pub async fn run_daemon() -> anyhow::Result<()> {
     let niri_state = start_event_thread(events_tx.clone());
     tokio::spawn(accept_loop(listener, events_tx.clone()));
 
-    let mut daemon = Daemon::new(NiriExecutor::start(
-        niri_mode,
-        events_tx.clone(),
-        niri_state,
-    ));
+    let mut daemon = Daemon::new(
+        NiriExecutor::start(niri_mode, events_tx.clone(), niri_state),
+        active_mode,
+        path.display().to_string(),
+    );
     let mut zellij = BridgeManager::default();
     while let Some(event) = events_rx.recv().await {
         if let DaemonEvent::NiriSnapshot { windows, .. } = &event {
@@ -355,6 +423,18 @@ async fn handle_connection(
         let opcode = timeout(HANDSHAKE_TIMEOUT, stream.read_u8())
             .await
             .context("control request timed out")??;
+        if opcode == STATUS_OPCODE {
+            let (response, status) = oneshot::channel();
+            events.send(DaemonEvent::Status { response }).await?;
+            let status = timeout(HANDSHAKE_TIMEOUT, status)
+                .await
+                .context("daemon status response timed out")??;
+            let mut encoded =
+                serde_json::to_vec(&ProtocolMessage::new(ControlResponse::Status { status }))?;
+            encoded.push(b'\n');
+            stream.write_all(&encoded).await?;
+            return Ok(());
+        }
         let direction = Direction::from_control_opcode(opcode)
             .with_context(|| format!("invalid control opcode {opcode}"))?;
         events.send(DaemonEvent::Navigate(direction)).await?;
@@ -471,6 +551,47 @@ mod tests {
             received.recv().await,
             Some(DaemonEvent::Navigate(Direction::Down))
         ));
+    }
+
+    #[tokio::test]
+    async fn status_control_frame_returns_versioned_state() {
+        let (mut client, server) = UnixStream::pair().unwrap();
+        let (events, mut received) = mpsc::channel(1);
+        let connection = tokio::spawn(handle_connection(server, events));
+        let expected = DaemonStatus {
+            version: "0.2.0".into(),
+            protocol_version: PROTOCOL_VERSION,
+            uptime_seconds: 12,
+            active_mode: "desktop".into(),
+            socket_path: "/run/user/1000/niri-zvim.sock".into(),
+            navigation_sequence: 9,
+            niri: NiriStatus {
+                window_count: 4,
+                focused_window: Some(42),
+                pending_navigations: 0,
+            },
+            zellij: Vec::new(),
+            nvim: Vec::new(),
+        };
+
+        client
+            .write_all(&niri_zvim_core::status_frame())
+            .await
+            .unwrap();
+        let response = match received.recv().await {
+            Some(DaemonEvent::Status { response }) => response,
+            _ => panic!("status event was not received"),
+        };
+        response.send(expected.clone()).unwrap();
+
+        let mut encoded = Vec::new();
+        client.read_to_end(&mut encoded).await.unwrap();
+        let response = serde_json::from_slice::<ProtocolMessage<ControlResponse>>(&encoded)
+            .unwrap()
+            .into_current()
+            .unwrap();
+        assert_eq!(response, ControlResponse::Status { status: expected });
+        connection.await.unwrap().unwrap();
     }
 
     #[tokio::test]

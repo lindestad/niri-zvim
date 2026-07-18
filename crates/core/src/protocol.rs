@@ -6,6 +6,7 @@ use thiserror::Error;
 pub const PROTOCOL_VERSION: u8 = 1;
 pub const CONTROL_MAGIC: u8 = 0x7e;
 pub const ADAPTER_MAGIC: u8 = 0x7f;
+pub const STATUS_OPCODE: u8 = 0;
 
 pub type Revision = u64;
 pub type PaneId = u32;
@@ -49,6 +50,10 @@ impl Direction {
 
 pub const fn adapter_prelude() -> [u8; 2] {
     [ADAPTER_MAGIC, PROTOCOL_VERSION]
+}
+
+pub const fn status_frame() -> [u8; 3] {
+    [CONTROL_MAGIC, PROTOCOL_VERSION, STATUS_OPCODE]
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -186,6 +191,54 @@ pub enum DaemonMessage {
     Navigate { sequence: u64, direction: Direction },
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DaemonStatus {
+    pub version: String,
+    pub protocol_version: u8,
+    pub uptime_seconds: u64,
+    pub active_mode: String,
+    pub socket_path: String,
+    pub navigation_sequence: u64,
+    pub niri: NiriStatus,
+    pub zellij: Vec<ZellijStatus>,
+    pub nvim: Vec<NvimStatus>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NiriStatus {
+    pub window_count: usize,
+    pub focused_window: Option<u64>,
+    pub pending_navigations: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ZellijStatus {
+    pub session: String,
+    pub client_id: ZellijClientId,
+    pub niri_window_id: u64,
+    pub focused_pane: PaneId,
+    pub pane_count: usize,
+    pub connected: bool,
+    pub pending_navigations: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NvimStatus {
+    pub id: String,
+    pub parent: NvimParent,
+    pub terminal_focused: bool,
+    pub focused_window: u64,
+    pub window_count: usize,
+    pub connected: bool,
+    pub pending_navigations: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ControlResponse {
+    Status { status: DaemonStatus },
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NavigationAction {
     Niri {
@@ -244,6 +297,7 @@ mod tests {
     #[test]
     fn control_and_adapter_connections_are_explicitly_versioned() {
         assert_eq!(Direction::Left.control_frame(), [0x7e, 1, 1]);
+        assert_eq!(status_frame(), [0x7e, 1, 0]);
         assert_eq!(adapter_prelude(), [0x7f, 1]);
         assert_eq!(Direction::from_control_opcode(4), Some(Direction::Right));
         assert_eq!(Direction::from_control_opcode(CONTROL_MAGIC), None);

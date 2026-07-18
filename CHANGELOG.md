@@ -4,6 +4,8 @@
 
 - Version the navigation and adapter wire protocols and reject mismatched
   clients instead of interpreting stale message formats.
+- Add human-readable and JSON daemon status with live graph, connection, focus,
+  and pending-navigation state.
 
 ## 0.1.1
 

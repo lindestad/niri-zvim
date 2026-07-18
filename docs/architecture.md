@@ -59,6 +59,11 @@ version in their binary prelude. Persistent Neovim and Zellij JSON messages are
 also nested in a versioned envelope. The daemon and adapters reject mismatched
 versions; 0.2 does not reinterpret the unversioned 0.1 wire format.
 
+The same control prelude reserves opcode zero for status queries. The daemon
+answers with a versioned JSON snapshot of its graph, executor connections, and
+pending prediction queues. Navigation opcodes remain write-only and do not pay
+for a response round trip.
+
 Executor reconciliation is deliberately outside the dispatch path. Niri uses
 separate persistent action and snapshot sockets, coalescing snapshot requests
 after a burst. Zellij plugin acknowledgements cancel a coalesced CLI fallback;

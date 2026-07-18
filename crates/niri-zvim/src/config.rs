@@ -89,6 +89,10 @@ impl Config {
             .copied()
             .with_context(|| format!("navigation mode {:?} is not defined", self.active_mode))
     }
+
+    pub fn active_mode_name(&self) -> &str {
+        &self.active_mode
+    }
 }
 
 fn config_path() -> PathBuf {
