@@ -4,6 +4,8 @@ use std::{
     io::ErrorKind,
     os::unix::fs::PermissionsExt,
     path::Path,
+    sync::Arc,
+    time::Duration,
 };
 
 use anyhow::Context;
@@ -12,9 +14,10 @@ use niri_zvim_core::{
     ZellijClient,
 };
 use tokio::{
-    io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader},
+    io::{AsyncBufRead, AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader},
     net::{UnixListener, UnixStream},
-    sync::mpsc,
+    sync::{Semaphore, mpsc},
+    time::timeout,
 };
 use tracing::{debug, info, warn};
 
@@ -32,7 +35,12 @@ use self::reconcile::{
 
 mod reconcile;
 
-type Sink = mpsc::UnboundedSender<DaemonMessage>;
+const MAX_CONNECTIONS: usize = 128;
+const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(1);
+const MAX_ADAPTER_FRAME_BYTES: usize = 1024 * 1024;
+pub(crate) const ADAPTER_OUTGOING_CAPACITY: usize = 64;
+
+type Sink = mpsc::Sender<DaemonMessage>;
 
 pub(crate) enum DaemonEvent {
     Navigate(Direction),
@@ -127,7 +135,7 @@ impl Daemon {
             }
             NavigationAction::Nvim { id, direction } => {
                 let sent = self.nvim.get(&id).is_some_and(|sink| {
-                    sink.send(DaemonMessage::Navigate {
+                    sink.try_send(DaemonMessage::Navigate {
                         sequence,
                         direction,
                     })
@@ -151,7 +159,7 @@ impl Daemon {
             }
             NavigationAction::Zellij { client, direction } => {
                 let sent = self.zellij.get(&client).is_some_and(|sink| {
-                    sink.send(DaemonMessage::Navigate {
+                    sink.try_send(DaemonMessage::Navigate {
                         sequence,
                         direction,
                     })
@@ -308,11 +316,17 @@ fn secure_socket(path: &Path) -> anyhow::Result<()> {
 }
 
 async fn accept_loop(listener: UnixListener, events: mpsc::Sender<DaemonEvent>) {
+    let connections = Arc::new(Semaphore::new(MAX_CONNECTIONS));
     loop {
         match listener.accept().await {
             Ok((stream, _)) => {
+                let Ok(permit) = connections.clone().try_acquire_owned() else {
+                    warn!(limit = MAX_CONNECTIONS, "connection limit reached");
+                    continue;
+                };
                 let events = events.clone();
                 tokio::spawn(async move {
+                    let _permit = permit;
                     if let Err(error) = handle_connection(stream, events).await {
                         debug!(%error, "client disconnected");
                     }
@@ -327,7 +341,9 @@ async fn handle_connection(
     mut stream: UnixStream,
     events: mpsc::Sender<DaemonEvent>,
 ) -> anyhow::Result<()> {
-    let first = stream.read_u8().await?;
+    let first = timeout(HANDSHAKE_TIMEOUT, stream.read_u8())
+        .await
+        .context("connection handshake timed out")??;
     if let Some(direction) = Direction::from_wire_byte(first) {
         events.send(DaemonEvent::Navigate(direction)).await?;
         return Ok(());
@@ -335,8 +351,8 @@ async fn handle_connection(
     anyhow::ensure!(first == adapter_magic(), "invalid protocol byte {first}");
 
     let (reader, mut writer) = stream.into_split();
-    let (sink, mut outgoing) = mpsc::unbounded_channel();
-    tokio::spawn(async move {
+    let (sink, mut outgoing) = mpsc::channel(ADAPTER_OUTGOING_CAPACITY);
+    let writer_task = tokio::spawn(async move {
         while let Some(message) = outgoing.recv().await {
             let Ok(mut encoded) = serde_json::to_vec(&message) else {
                 continue;
@@ -348,9 +364,23 @@ async fn handle_connection(
         }
     });
 
-    let mut lines = BufReader::new(reader).lines();
-    while let Some(line) = lines.next_line().await? {
-        let message = serde_json::from_str(&line)?;
+    let read_result = read_adapter_messages(BufReader::new(reader), events, sink).await;
+    writer_task.abort();
+    let _ = writer_task.await;
+    read_result
+}
+
+async fn read_adapter_messages<R>(
+    mut reader: R,
+    events: mpsc::Sender<DaemonEvent>,
+    sink: Sink,
+) -> anyhow::Result<()>
+where
+    R: AsyncBufRead + Unpin,
+{
+    let mut frame = Vec::new();
+    while read_bounded_line(&mut reader, &mut frame).await? {
+        let message = serde_json::from_slice(&frame)?;
         events
             .send(DaemonEvent::Adapter {
                 message,
@@ -361,9 +391,35 @@ async fn handle_connection(
     Ok(())
 }
 
+async fn read_bounded_line<R>(reader: &mut R, frame: &mut Vec<u8>) -> anyhow::Result<bool>
+where
+    R: AsyncBufRead + Unpin,
+{
+    frame.clear();
+    loop {
+        let available = reader.fill_buf().await?;
+        if available.is_empty() {
+            return Ok(!frame.is_empty());
+        }
+        let newline = available.iter().position(|byte| *byte == b'\n');
+        let data_len = newline.unwrap_or(available.len());
+        anyhow::ensure!(
+            frame.len() + data_len <= MAX_ADAPTER_FRAME_BYTES,
+            "adapter frame exceeds {MAX_ADAPTER_FRAME_BYTES} bytes"
+        );
+        frame.extend_from_slice(&available[..data_len]);
+        reader.consume(newline.map_or(data_len, |position| position + 1));
+        if newline.is_some() {
+            return Ok(true);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::{os::unix::fs::PermissionsExt, os::unix::net::UnixListener as StdUnixListener};
+
+    use tokio::io::BufReader;
 
     use super::*;
 
@@ -379,5 +435,28 @@ mod tests {
             fs::metadata(path).unwrap().permissions().mode() & 0o777,
             0o600
         );
+    }
+
+    #[tokio::test]
+    async fn adapter_lines_are_size_bounded() {
+        let input = vec![b'x'; MAX_ADAPTER_FRAME_BYTES + 1];
+        let mut reader = BufReader::new(input.as_slice());
+        let mut frame = Vec::new();
+
+        let error = read_bounded_line(&mut reader, &mut frame)
+            .await
+            .unwrap_err();
+
+        assert!(error.to_string().contains("adapter frame exceeds"));
+    }
+
+    #[tokio::test]
+    async fn adapter_lines_accept_a_final_frame_without_a_newline() {
+        let mut reader = BufReader::new(&b"{}"[..]);
+        let mut frame = Vec::new();
+
+        assert!(read_bounded_line(&mut reader, &mut frame).await.unwrap());
+        assert_eq!(frame, b"{}");
+        assert!(!read_bounded_line(&mut reader, &mut frame).await.unwrap());
     }
 }

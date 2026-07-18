@@ -54,7 +54,7 @@ impl RefreshState {
 }
 use tracing::{debug, info};
 
-use crate::daemon::DaemonEvent;
+use crate::daemon::{ADAPTER_OUTGOING_CAPACITY, DaemonEvent};
 
 use super::{
     metadata::{plugin_path, watch_session_metadata},
@@ -98,7 +98,7 @@ pub(super) async fn run_bridge(
         .with_context(|| format!("could not connect to Zellij session {session}"))?;
     let mut stdin = child.stdin.take().context("Zellij pipe has no stdin")?;
     let stdout = child.stdout.take().context("Zellij pipe has no stdout")?;
-    let (sink, mut actions) = mpsc::unbounded_channel();
+    let (sink, mut actions) = mpsc::channel(ADAPTER_OUTGOING_CAPACITY);
     let (refresh_tx, refresh_rx) = mpsc::unbounded_channel();
     let revisions = Arc::new(AtomicU64::new(0));
 
@@ -191,7 +191,7 @@ async fn fallback_refresh_loop(
     session: String,
     window_id: u64,
     events: mpsc::Sender<DaemonEvent>,
-    sink: mpsc::UnboundedSender<DaemonMessage>,
+    sink: mpsc::Sender<DaemonMessage>,
     revisions: Arc<AtomicU64>,
     mut refreshes: mpsc::UnboundedReceiver<RefreshEvent>,
 ) {
