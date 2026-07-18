@@ -85,9 +85,11 @@ Inside Zellij, the adapter uses `ZELLIJ_SESSION_NAME` and `ZELLIJ_PANE_ID` to
 attach its window graph beneath the containing pane. This path inherits the
 Zellij discovery restrictions above.
 
-The 0.1 installer loads the adapter automatically for every Neovim instance
-and retries the daemon socket while Neovim remains open. An explicit setup and
-opt-out interface is planned for 0.2.
+The 0.2 adapter connects only after `require("niri-zvim").setup()`. Setup can
+override the socket and retry interval; `disable()` removes its autocommands,
+closes the connection, and removes the instance from the daemon graph. This is
+an intentional opt-in boundary even when the runtime files are installed in
+Neovim's user site.
 
 ## Known unsupported configurations
 

@@ -14,8 +14,15 @@ local navigation_queue = {}
 local navigation_pending = false
 local acknowledged_sequence
 local protocol_version = 1
+local enabled = false
+local options = {
+  reconnect_interval_ms = 250,
+}
 
 local function socket_path()
+  if options.socket_path then
+    return options.socket_path
+  end
   if vim.env.NIRI_ZVIM_SOCKET and vim.env.NIRI_ZVIM_SOCKET ~= "" then
     return vim.env.NIRI_ZVIM_SOCKET
   end
@@ -204,18 +211,26 @@ local function consume(data)
 end
 
 local function reconnect()
-  if reconnect_timer then
+  if not enabled or reconnect_timer then
     return
   end
-  reconnect_timer = uv.new_timer()
-  reconnect_timer:start(250, 0, vim.schedule_wrap(function()
-    reconnect_timer:close()
-    reconnect_timer = nil
-    M.connect()
+  local timer = uv.new_timer()
+  reconnect_timer = timer
+  timer:start(options.reconnect_interval_ms, 0, vim.schedule_wrap(function()
+    timer:close()
+    if reconnect_timer == timer then
+      reconnect_timer = nil
+    end
+    if enabled then
+      M.connect()
+    end
   end))
 end
 
 function M.connect()
+  if not enabled then
+    return
+  end
   local path = socket_path()
   if not path then
     vim.notify_once("niri-zvim requires XDG_RUNTIME_DIR or NIRI_ZVIM_SOCKET", vim.log.levels.ERROR)
@@ -224,18 +239,28 @@ function M.connect()
   if pipe and not pipe:is_closing() then
     pipe:close()
   end
-  pipe = uv.new_pipe(false)
-  pipe:connect(path, function(error)
+  local connection = uv.new_pipe(false)
+  pipe = connection
+  connection:connect(path, function(error)
+    if pipe ~= connection or not enabled then
+      if not connection:is_closing() then
+        connection:close()
+      end
+      return
+    end
     if error then
-      pipe:close()
+      connection:close()
       reconnect()
       return
     end
-    pipe:write(string.char(0x7f, protocol_version))
-    pipe:read_start(function(read_error, data)
+    connection:write(string.char(0x7f, protocol_version))
+    connection:read_start(function(read_error, data)
       if read_error or not data then
-        if not pipe:is_closing() then
-          pipe:close()
+        if not connection:is_closing() then
+          connection:close()
+        end
+        if pipe == connection then
+          pipe = nil
         end
         reconnect()
         return
@@ -246,7 +271,69 @@ function M.connect()
   end)
 end
 
-function M.setup()
+local function validate_options(user_options)
+  if user_options == nil then
+    user_options = {}
+  end
+  if type(user_options) ~= "table" then
+    error("niri-zvim setup options must be a table")
+  end
+  for key in pairs(user_options) do
+    if key ~= "enabled" and key ~= "socket_path" and key ~= "reconnect_interval_ms" then
+      error("unknown niri-zvim setup option: " .. key)
+    end
+  end
+  if user_options.enabled ~= nil and type(user_options.enabled) ~= "boolean" then
+    error("niri-zvim enabled must be a boolean")
+  end
+  if user_options.socket_path ~= nil
+      and (type(user_options.socket_path) ~= "string"
+        or user_options.socket_path == ""
+        or user_options.socket_path:sub(1, 1) ~= "/") then
+    error("niri-zvim socket_path must be a non-empty absolute path")
+  end
+  if user_options.reconnect_interval_ms ~= nil
+      and (type(user_options.reconnect_interval_ms) ~= "number"
+        or user_options.reconnect_interval_ms < 1
+        or user_options.reconnect_interval_ms % 1 ~= 0) then
+    error("niri-zvim reconnect_interval_ms must be a positive integer")
+  end
+  return {
+    enabled = user_options.enabled ~= false,
+    socket_path = user_options.socket_path,
+    reconnect_interval_ms = user_options.reconnect_interval_ms or 250,
+  }
+end
+
+function M.disable()
+  if enabled then
+    write({ type = "nvim_closed", id = instance_id })
+  end
+  enabled = false
+  pcall(vim.api.nvim_del_augroup_by_name, "niri_zvim")
+  if reconnect_timer then
+    reconnect_timer:stop()
+    reconnect_timer:close()
+    reconnect_timer = nil
+  end
+  if pipe and not pipe:is_closing() then
+    pipe:read_stop()
+    pipe:close()
+  end
+  pipe = nil
+  input = ""
+  navigation_queue = {}
+  navigation_pending = false
+end
+
+function M.setup(user_options)
+  local configured = validate_options(user_options)
+  M.disable()
+  options = configured
+  if not configured.enabled then
+    return M
+  end
+  enabled = true
   local group = vim.api.nvim_create_augroup("niri_zvim", { clear = true })
   vim.api.nvim_create_autocmd({
     "WinNew",
@@ -288,6 +375,22 @@ function M.setup()
     end,
   })
   M.connect()
+  return M
+end
+
+function M.enable()
+  if enabled then
+    return M
+  end
+  return M.setup({
+    enabled = true,
+    socket_path = options.socket_path,
+    reconnect_interval_ms = options.reconnect_interval_ms,
+  })
+end
+
+function M.is_enabled()
+  return enabled
 end
 
 return M

@@ -12,6 +12,8 @@
   an isolated live test that proves a non-default app ID drives discovery.
 - Support several terminal clients attached to one Zellij session with
   client-targeted plugin messages and bidirectional live traversal.
+- Make Neovim integration explicitly opt-in through a validated, idempotent
+  `setup()` interface with socket/retry options and complete runtime teardown.
 
 ## 0.1.1
 

@@ -68,5 +68,6 @@ if command -v systemctl >/dev/null; then
 fi
 
 echo "Installed niri-zvim."
+echo "Add 'require(\"niri-zvim\").setup()' to your Neovim configuration."
 echo "Approve the niri-zvim permission prompt when it first appears in Zellij."
 echo "Run 'niri-zvim doctor' to verify the complete integration."

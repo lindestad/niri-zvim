@@ -47,6 +47,28 @@ Once published, `cargo install --locked niri-zvim` installs only the native
 client and daemon. It does not install the Zellij WASM plugin, Neovim adapter,
 configuration, or service; `just install` is currently the complete path.
 
+Enable the installed Neovim adapter explicitly in your configuration:
+
+```lua
+require("niri-zvim").setup()
+```
+
+Loading its runtime files alone does not connect to the daemon. The complete
+setup surface is deliberately small:
+
+```lua
+require("niri-zvim").setup({
+  enabled = true,
+  socket_path = nil,          -- NIRI_ZVIM_SOCKET, then XDG_RUNTIME_DIR
+  reconnect_interval_ms = 250,
+})
+```
+
+Unknown or invalid options are rejected. `require("niri-zvim").disable()`
+disconnects, removes its autocommands, and removes the instance from the daemon
+graph. `:NiriZvimEnable` and `:NiriZvimDisable` provide the same runtime toggle;
+enabling again retains the last configured socket and retry interval.
+
 Zellij requires a one-time interactive permission approval. From any Zellij
 session, run:
 

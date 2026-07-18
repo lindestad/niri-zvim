@@ -391,7 +391,10 @@ fn check_neovim_adapter(checks: &mut Vec<DoctorCheck>) {
         pass(
             checks,
             "neovim adapter",
-            format!("installed under {}", site.display()),
+            format!(
+                "installed under {}; explicit setup() is required",
+                site.display()
+            ),
         );
     } else {
         fail(
