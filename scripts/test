@@ -24,13 +24,18 @@ version_at_least() {
 }
 
 nvim_version="$(nvim --version | sed -n '1s/^NVIM v//p')"
+niri_version="$(niri --version | awk '{print $2}')"
 zellij_version="$(zellij --version | awk '{print $2}')"
 if ! version_at_least "$nvim_version" "0.10.0"; then
   echo "Neovim 0.10.0 or newer is required (found $nvim_version)" >&2
   exit 1
 fi
-if ! version_at_least "$zellij_version" "0.44.0"; then
-  echo "Zellij 0.44.0 or newer is required (found $zellij_version)" >&2
+if [[ "$niri_version" != "26.04" ]]; then
+  echo "niri 26.04 is required (found $niri_version)" >&2
+  exit 1
+fi
+if [[ "$zellij_version" != "0.44.3" ]]; then
+  echo "Zellij 0.44.3 is required (found $zellij_version)" >&2
   exit 1
 fi
 if [[ -z "${NIRI_SOCKET:-}" || ! -S "$NIRI_SOCKET" ]]; then
@@ -50,7 +55,7 @@ if ! ghostty +validate-config --config-file="$ghostty_config" >/dev/null; then
   exit 1
 fi
 
-echo "Dependencies ready: Ghostty $(ghostty +version | sed -n 's/^  - version: //p'), Zellij $zellij_version, Neovim $nvim_version"
+echo "Dependencies ready: niri $niri_version, Ghostty $(ghostty +version | sed -n 's/^  - version: //p'), Zellij $zellij_version, Neovim $nvim_version"
 
 failures=()
 run_suite() {
