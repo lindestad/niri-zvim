@@ -2,13 +2,24 @@
 name = "niri-zvim"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "State-synchronized navigation across niri, Zellij, and Neovim"
+readme = "../../README.md"
+keywords = ["niri", "neovim", "zellij", "navigation", "wayland"]
+categories = ["command-line-utilities"]
+publish = ["crates-io"]
+autobins = false
+
+[features]
+live-bench = []
 
 [dependencies]
 anyhow.workspace = true
-clap.workspace = true
 niri-ipc.workspace = true
-niri-zvim-core = { path = "../core" }
+niri-zvim-core = { version = "0.1.0", path = "../core" }
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
@@ -30,3 +41,8 @@ path = "src/bin/client.rs"
 [[bin]]
 name = "niri-zvimd"
 path = "src/bin/daemon.rs"
+
+[[bin]]
+name = "live-bench-sample"
+path = "src/bin/live-bench-sample.rs"
+required-features = ["live-bench"]

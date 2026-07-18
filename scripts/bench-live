@@ -266,7 +266,7 @@ printf 'Starting in 2 seconds with %s single samples and %s burst samples...\n' 
 sleep 2
 
 cargo build --quiet --release -p niri-zvim \
-  --bin niri-zvim --bin live-bench-sample
+  --features live-bench --bin niri-zvim --bin live-bench-sample
 if [[ "$selected_backend" == all || "$selected_backend" == niri ]]; then
   bench_niri
 fi

@@ -2,7 +2,15 @@
 name = "niri-zvim-core"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Shared routing graph and adapter protocol for niri-zvim"
+readme = "../../README.md"
+keywords = ["niri", "neovim", "zellij", "navigation", "wayland"]
+categories = ["command-line-utilities"]
+publish = ["crates-io"]
 
 [dependencies]
 serde.workspace = true
