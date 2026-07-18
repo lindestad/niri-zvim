@@ -109,7 +109,7 @@ mod tests {
 
     #[test]
     fn rejects_ghostty_titles_that_are_not_session_names() {
-        for title in ["", ".", "..", "/home/dl", "project/src"] {
+        for title in ["", ".", "..", "/home/user", "project/src"] {
             assert!(!session_socket_exists(title), "accepted {title:?}");
         }
     }

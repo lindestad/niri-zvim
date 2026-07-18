@@ -6,7 +6,9 @@ and Neovim splits.
 Version 0.1 is a developer preview for the stack it was built and tested on.
 Zellij discovery is currently specific to Ghostty, and the source installer is
 intended for people who are comfortable inspecting and maintaining a local
-checkout. See [support and compatibility](docs/support.md) before installing.
+checkout. See
+[support and compatibility](https://github.com/lindestad/niri-zvim/blob/main/docs/support.md)
+before installing.
 
 niri-zvimd keeps a live graph of focus and topology. Neovim and a background
 Zellij plugin push changes to it; the niri-zvim command sends one-byte
@@ -18,9 +20,11 @@ Focus changes are applied optimistically. Repeated requests route against the
 predicted graph without waiting for acknowledgements; authoritative snapshots
 then confirm or reconcile the prediction.
 
-See [docs/architecture.md](docs/architecture.md) for the protocol and
-invariants, and [docs/live-testing.md](docs/live-testing.md) for the desktop
-race tests and lessons from their fixtures.
+See
+[the architecture documentation](https://github.com/lindestad/niri-zvim/blob/main/docs/architecture.md)
+for the protocol and invariants, and
+[the live-testing documentation](https://github.com/lindestad/niri-zvim/blob/main/docs/live-testing.md)
+for the desktop race tests and lessons from their fixtures.
 
 ## Install from source
 
@@ -145,7 +149,9 @@ The deterministic benchmark suite measures size-parameterized routing,
 topology construction, Unix socket dispatch, and the short-lived keypress
 client. `just bench-live` separately compares native and daemon-triggered Niri,
 Zellij, and Neovim focus convergence on the running desktop. See
-[docs/benchmarking.md](docs/benchmarking.md) for methodology and interpretation
-limits.
+[the benchmarking documentation](https://github.com/lindestad/niri-zvim/blob/main/docs/benchmarking.md)
+for methodology and interpretation limits.
 
-See [CHANGELOG.md](CHANGELOG.md) for release notes.
+See
+[the changelog](https://github.com/lindestad/niri-zvim/blob/main/CHANGELOG.md)
+for release notes.

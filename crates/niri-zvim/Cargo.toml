@@ -12,6 +12,7 @@ keywords = ["niri", "neovim", "zellij", "navigation", "wayland"]
 categories = ["command-line-utilities"]
 publish = ["crates-io"]
 autobins = false
+exclude = ["tests/nvim_adapter.rs"]
 
 [features]
 live-bench = []
