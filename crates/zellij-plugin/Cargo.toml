@@ -11,7 +11,7 @@ readme = "../../README.md"
 publish = false
 
 [dependencies]
-niri-zvim-core = { version = "0.1.0", path = "../core" }
+niri-zvim-core = { version = "0.1.1", path = "../core" }
 serde_json.workspace = true
 zellij-tile.workspace = true
 

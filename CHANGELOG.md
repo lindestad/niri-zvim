@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.1.1
+
+- Treat adapter focus outside a published topology as an edge instead of
+  panicking, including when a Neovim floating window is focused.
+- Include the MIT license in both published crates and keep repository-only
+  tests and relative documentation links out of their source archives.
+- Verify the contents and tests of unpacked crate archives during release
+  checks.
+- Refuse to replace real Neovim runtime paths with installer symlinks.
+- Require a private runtime directory or explicit absolute socket path, set
+  user-only socket permissions, and bound connection, frame, and outgoing
+  queue resources.
+
 ## 0.1.0
 
 Initial developer-preview release.

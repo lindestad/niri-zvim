@@ -20,7 +20,7 @@ live-bench = []
 [dependencies]
 anyhow.workspace = true
 niri-ipc.workspace = true
-niri-zvim-core = { version = "0.1.0", path = "../core" }
+niri-zvim-core = { version = "0.1.1", path = "../core" }
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
