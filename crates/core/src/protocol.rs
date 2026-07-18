@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
 pub type Revision = u64;
 pub type PaneId = u32;
@@ -106,7 +106,7 @@ pub struct ZellijClientState {
     pub client: ZellijClient,
     pub niri_window_id: u64,
     pub revision: Revision,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "deserialize_required_option")]
     pub acknowledged_sequence: Option<u64>,
     pub focused_pane: PaneId,
     pub pane_neighbors: BTreeMap<String, NeighborMap<PaneId>>,
@@ -116,10 +116,9 @@ pub struct ZellijClientState {
 pub struct NvimInstance {
     pub id: String,
     pub parent: NvimParent,
-    #[serde(default)]
     pub terminal_focused: bool,
     pub revision: Revision,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "deserialize_required_option")]
     pub acknowledged_sequence: Option<u64>,
     pub focused_window: u64,
     pub window_neighbors: BTreeMap<String, NeighborMap<u64>>,
@@ -153,4 +152,54 @@ pub enum NavigationAction {
         id: String,
         direction: Direction,
     },
+}
+
+fn deserialize_required_option<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Option::deserialize(deserializer)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn adapter_state_requires_every_current_field() {
+        let zellij = ZellijClientState {
+            client: ZellijClient {
+                session: "current".into(),
+                client_id: 1,
+            },
+            niri_window_id: 2,
+            revision: 3,
+            acknowledged_sequence: None,
+            focused_pane: 4,
+            pane_neighbors: BTreeMap::new(),
+        };
+        assert_field_is_required::<ZellijClientState>(zellij, "acknowledged_sequence");
+
+        let nvim = NvimInstance {
+            id: "current".into(),
+            parent: NvimParent::NiriWindow(2),
+            terminal_focused: true,
+            revision: 3,
+            acknowledged_sequence: None,
+            focused_window: 4,
+            window_neighbors: BTreeMap::new(),
+        };
+        assert_field_is_required::<NvimInstance>(nvim.clone(), "terminal_focused");
+        assert_field_is_required::<NvimInstance>(nvim, "acknowledged_sequence");
+    }
+
+    fn assert_field_is_required<T>(state: T, field: &str)
+    where
+        T: Serialize + serde::de::DeserializeOwned,
+    {
+        let mut value = serde_json::to_value(state).unwrap();
+        value.as_object_mut().unwrap().remove(field).unwrap();
+        assert!(serde_json::from_value::<T>(value).is_err());
+    }
 }

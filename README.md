@@ -24,8 +24,8 @@ race tests and lessons from their fixtures.
 
 ## Install from source
 
-The complete 0.1 integration requires niri 26.04, Zellij 0.44.3, Neovim 0.10
-or newer, Ghostty's GTK build, Rust 1.97.1 or newer, Just, and systemd user
+The complete 0.1 integration requires niri 26.04, Zellij 0.44.3, Neovim
+0.12.4, Ghostty's GTK build, Rust 1.97.1 or newer, Just, and systemd user
 services. Install the binaries, adapters, and daemon with:
 
     just install

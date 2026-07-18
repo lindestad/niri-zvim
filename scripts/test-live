@@ -77,8 +77,12 @@ source "$live_tests_dir/zellij-one.sh"
 source "$live_tests_dir/zellij-three.sh"
 # shellcheck source=scripts/live-tests/nested.sh
 source "$live_tests_dir/nested.sh"
-# shellcheck source=scripts/live-tests/consumed.sh
-source "$live_tests_dir/consumed.sh"
+# shellcheck source=scripts/live-tests/consumed-zellij.sh
+source "$live_tests_dir/consumed-zellij.sh"
+# shellcheck source=scripts/live-tests/consumed-reflow.sh
+source "$live_tests_dir/consumed-reflow.sh"
+# shellcheck source=scripts/live-tests/consumed-nvim.sh
+source "$live_tests_dir/consumed-nvim.sh"
 # shellcheck source=scripts/live-tests/workspaces.sh
 source "$live_tests_dir/workspaces.sh"
 # shellcheck source=scripts/live-tests/preservation.sh

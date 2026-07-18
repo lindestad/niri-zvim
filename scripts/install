@@ -52,11 +52,6 @@ fi
 ln -sfn "$project_dir/nvim/lua/niri-zvim" "$nvim_site_dir/lua/niri-zvim"
 ln -sfn "$project_dir/nvim/plugin/niri-zvim.lua" "$nvim_site_dir/plugin/niri-zvim.lua"
 
-legacy_nvim_package="$nvim_site_dir/pack/niri-zvim/start/niri-zvim"
-if [[ -L "$legacy_nvim_package" ]]; then
-  rm "$legacy_nvim_package"
-fi
-
 if command -v systemctl >/dev/null; then
   systemctl --user daemon-reload
   systemctl --user enable niri-zvim.service

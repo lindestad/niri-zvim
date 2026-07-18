@@ -12,15 +12,15 @@ and should not be presented as supported.
 | Operating system | Linux in a running niri Wayland session |
 | niri | 26.04, using `niri-ipc` 26.4.0 |
 | Zellij | 0.44.3 |
-| Neovim | 0.10 or newer; 0.12 is the tested version |
+| Neovim | 0.12.4 |
 | Terminal for direct Neovim | Any terminal that delivers terminal-focus events to Neovim |
 | Terminal for Zellij | Ghostty GTK 1.3 with the standard Wayland app ID and Zellij-managed title |
 | Rust source build | Rust 1.97.1 or newer with `wasm32-wasip1` available through rustup |
 | Service manager | systemd user services through the 0.1 installer |
 
-This project intentionally follows the latest stable niri, Zellij, and Rust
-releases rather than maintaining a broad compatibility range. Rust 1.97.1 is
-the floor because it contains the fix for an LLVM miscompilation present in
+This project intentionally follows the latest stable niri, Zellij, Neovim, and
+Rust releases rather than maintaining a broad compatibility range. Rust 1.97.1
+is the floor because it contains the fix for an LLVM miscompilation present in
 earlier toolchains. The release versions above are rechecked when each
 niri-zvim release is prepared.
 
