@@ -20,7 +20,6 @@ struct ListedPane {
 pub(super) async fn query_snapshot(
     session: &str,
     window_id: u64,
-    client_id: u16,
 ) -> anyhow::Result<ZellijClientState> {
     let panes = Command::new("zellij")
         .args([
@@ -47,24 +46,27 @@ pub(super) async fn query_snapshot(
         clients.status.success(),
         "could not list clients in Zellij session {session}"
     );
-    let focused_pane = focused_pane_from_clients(&clients.stdout)
+    let (client_id, focused_pane) = focused_client_from_clients(&clients.stdout)
         .context("Zellij does not have exactly one connected terminal client")?;
     let panes: Vec<ListedPane> = serde_json::from_slice(&panes.stdout)?;
     snapshot_from_panes(session, window_id, client_id, focused_pane, &panes)
         .context("Zellij has no focused terminal pane")
 }
 
-fn focused_pane_from_clients(output: &[u8]) -> Option<u32> {
+fn focused_client_from_clients(output: &[u8]) -> Option<(u16, u32)> {
     let output = std::str::from_utf8(output).ok()?;
-    let mut panes = output.lines().skip(1).filter_map(|line| {
-        line.split_whitespace()
-            .nth(1)?
+    let mut clients = output.lines().skip(1).filter_map(|line| {
+        let mut fields = line.split_whitespace();
+        let client_id = fields.next()?.parse::<u16>().ok()?;
+        let pane_id = fields
+            .next()?
             .strip_prefix("terminal_")?
             .parse::<u32>()
-            .ok()
+            .ok()?;
+        Some((client_id, pane_id))
     });
-    let focused = panes.next()?;
-    panes.next().is_none().then_some(focused)
+    let focused = clients.next()?;
+    clients.next().is_none().then_some(focused)
 }
 
 fn snapshot_from_panes(
@@ -156,7 +158,7 @@ mod tests {
         let two =
             b"CLIENT_ID ZELLIJ_PANE_ID RUNNING_COMMAND\n1 terminal_37 N/A\n2 terminal_9 N/A\n";
 
-        assert_eq!(focused_pane_from_clients(one), Some(37));
-        assert_eq!(focused_pane_from_clients(two), None);
+        assert_eq!(focused_client_from_clients(one), Some((1, 37)));
+        assert_eq!(focused_client_from_clients(two), None);
     }
 }

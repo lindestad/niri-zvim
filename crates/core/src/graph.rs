@@ -59,6 +59,12 @@ impl NavigationGraph {
         self.zellij.insert(state.client.clone(), state);
     }
 
+    pub fn retain_zellij_clients(&mut self, session: &str, client_ids: &[u16]) {
+        self.zellij.retain(|client, _| {
+            client.session != session || client_ids.contains(&client.client_id)
+        });
+    }
+
     pub fn update_nvim(&mut self, mut state: NvimInstance) {
         self.resolve_nvim_parent(&mut state);
         let accept = self
@@ -436,6 +442,20 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    #[test]
+    fn disconnected_zellij_clients_are_removed_per_session() {
+        let mut graph = nested_graph(None, None);
+        let mut second = graph.zellij.values().next().unwrap().clone();
+        second.client.client_id = 2;
+        second.niri_window_id = 2;
+        graph.update_zellij(second);
+
+        graph.retain_zellij_clients("dev", &[2]);
+
+        assert_eq!(graph.zellij.len(), 1);
+        assert_eq!(graph.zellij.keys().next().unwrap().client_id, 2);
     }
 
     #[test]

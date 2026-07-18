@@ -8,8 +8,8 @@ use zellij_tile::prelude::{
     Direction as ZellijDirection, Event, EventType, PaneManifest, PermissionStatus, PermissionType,
     PipeMessage, PipeSource, ZellijPlugin, block_cli_pipe_input, cli_pipe_output,
     get_focused_pane_info, get_plugin_ids, get_session_environment_variables, get_session_list,
-    hide_self, move_focus, register_plugin, report_panic, request_permission, set_selectable,
-    set_timeout, subscribe, unblock_cli_pipe_input,
+    hide_self, list_clients, move_focus, register_plugin, report_panic, request_permission,
+    set_selectable, set_timeout, subscribe, unblock_cli_pipe_input,
 };
 
 const PUBLISH_RETRY_INTERVAL_SECONDS: f64 = 0.05;
@@ -33,7 +33,8 @@ type PaneNeighbors = BTreeMap<String, NeighborMap<u32>>;
 struct Plugin {
     client_id: u16,
     session: Option<String>,
-    niri_window_id: Option<u64>,
+    client_ids: Vec<u16>,
+    niri_window_ids: Vec<u64>,
     revision: u64,
     pending_sequence: Option<u64>,
     pending_origin: Option<u32>,
@@ -59,6 +60,7 @@ impl ZellijPlugin for Plugin {
             EventType::ModeUpdate,
             EventType::TabUpdate,
             EventType::PaneUpdate,
+            EventType::ListClients,
             EventType::BeforeClose,
         ]);
         request_permission(&[
@@ -75,6 +77,7 @@ impl ZellijPlugin for Plugin {
                 self.session = get_session_environment_variables().remove("ZELLIJ_SESSION_NAME");
                 set_selectable(false);
                 hide_self();
+                list_clients();
                 self.state_changed();
             }
             Event::ModeUpdate(mode) => {
@@ -93,6 +96,13 @@ impl ZellijPlugin for Plugin {
                 }
                 self.pane_manifest = Some(manifest);
                 self.revision = self.revision.wrapping_add(1);
+                self.state_changed();
+            }
+            Event::ListClients(clients) => {
+                self.client_ids = clients.into_iter().map(|client| client.client_id).collect();
+                self.client_ids.sort_unstable();
+                self.client_ids.dedup();
+                self.publish_clients();
                 self.state_changed();
             }
             Event::Timer(_) if self.publish_retry_pending => {
@@ -140,15 +150,22 @@ impl Plugin {
             return;
         };
         match message {
-            DaemonMessage::BindNiriWindow { window_id, session } => {
-                self.niri_window_id = Some(window_id);
+            DaemonMessage::ZellijSync {
+                session,
+                mut window_ids,
+            } => {
+                window_ids.sort_unstable();
+                window_ids.dedup();
+                self.niri_window_ids = window_ids;
                 self.session = Some(session);
+                list_clients();
                 self.defer_publish();
             }
-            DaemonMessage::Navigate {
+            DaemonMessage::ZellijNavigate {
+                client_id,
                 sequence,
                 direction,
-            } => {
+            } if client_id == self.client_id => {
                 self.pending_sequence = Some(sequence);
                 let (origin, target) = self.predicted_transition(direction);
                 self.pending_origin = origin;
@@ -160,6 +177,7 @@ impl Plugin {
                     niri_zvim_core::Direction::Right => ZellijDirection::Right,
                 });
             }
+            DaemonMessage::Navigate { .. } | DaemonMessage::ZellijNavigate { .. } => {}
         }
     }
 
@@ -188,11 +206,12 @@ impl Plugin {
     }
 
     fn publish(&mut self) -> bool {
-        let (Some(pipe_id), Some(session), Some(niri_window_id)) = (
-            self.pipe_id.clone(),
-            self.session.clone(),
-            self.niri_window_id,
-        ) else {
+        let (Some(pipe_id), Some(session)) = (self.pipe_id.clone(), self.session.clone()) else {
+            return false;
+        };
+        let Some(niri_window_id) =
+            client_window_id(self.client_id, &self.client_ids, &self.niri_window_ids)
+        else {
             return false;
         };
         let Ok((tab, focused)) = get_focused_pane_info() else {
@@ -227,22 +246,41 @@ impl Plugin {
             };
             pane_neighbors(&session_info.panes, tab, focused_pane)
         };
-        let message = ProtocolMessage::new(AdapterMessage::ZellijSnapshot {
-            state: ZellijClientState {
-                client: ZellijClient {
-                    session,
-                    client_id: self.client_id,
+        Self::write_adapter(
+            &pipe_id,
+            AdapterMessage::ZellijSnapshot {
+                state: ZellijClientState {
+                    client: ZellijClient {
+                        session,
+                        client_id: self.client_id,
+                    },
+                    niri_window_id,
+                    revision: self.revision,
+                    acknowledged_sequence: self.acknowledged_sequence,
+                    focused_pane,
+                    pane_neighbors,
                 },
-                niri_window_id,
-                revision: self.revision,
-                acknowledged_sequence: self.acknowledged_sequence,
-                focused_pane,
-                pane_neighbors,
             },
-        });
-        if let Ok(mut encoded) = serde_json::to_string(&message) {
+        )
+    }
+
+    fn publish_clients(&self) {
+        let (Some(pipe_id), Some(session)) = (&self.pipe_id, &self.session) else {
+            return;
+        };
+        Self::write_adapter(
+            pipe_id,
+            AdapterMessage::ZellijClients {
+                session: session.clone(),
+                client_ids: self.client_ids.clone(),
+            },
+        );
+    }
+
+    fn write_adapter(pipe_id: &str, message: AdapterMessage) -> bool {
+        if let Ok(mut encoded) = serde_json::to_string(&ProtocolMessage::new(message)) {
             encoded.push('\n');
-            cli_pipe_output(&pipe_id, &encoded);
+            cli_pipe_output(pipe_id, &encoded);
             true
         } else {
             false
@@ -282,6 +320,17 @@ impl Plugin {
                 .or_insert_with(|| pane_neighbors_for_layer(manifest, tab, floating)),
         )
     }
+}
+
+fn client_window_id(client_id: u16, client_ids: &[u16], window_ids: &[u64]) -> Option<u64> {
+    if client_ids.len() != window_ids.len() {
+        return None;
+    }
+    client_ids
+        .iter()
+        .position(|candidate| *candidate == client_id)
+        .and_then(|position| window_ids.get(position))
+        .copied()
 }
 
 fn pane_neighbors(

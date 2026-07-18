@@ -113,8 +113,10 @@ impl Daemon {
             }
             DaemonEvent::Adapter { message, sink } => self.update_adapter(message, sink),
             DaemonEvent::ZellijBridgeStopped { session } => {
+                self.zellij.retain(|client, _| client.session != session);
                 self.pending_zellij
                     .retain(|client, _| client.session != session);
+                self.graph.retain_zellij_clients(&session, &[]);
             }
             DaemonEvent::Status { response } => {
                 let _ = response.send(self.status());
@@ -225,7 +227,8 @@ impl Daemon {
             }
             NavigationAction::Zellij { client, direction } => {
                 let sent = self.zellij.get(&client).is_some_and(|sink| {
-                    sink.try_send(DaemonMessage::Navigate {
+                    sink.try_send(DaemonMessage::ZellijNavigate {
+                        client_id: client.client_id,
                         sequence,
                         direction,
                     })
@@ -326,6 +329,18 @@ impl Daemon {
                             .predict_zellij_focus(&client, navigation.direction);
                     }
                 }
+            }
+            AdapterMessage::ZellijClients {
+                session,
+                client_ids,
+            } => {
+                self.zellij.retain(|client, _| {
+                    client.session != session || client_ids.contains(&client.client_id)
+                });
+                self.pending_zellij.retain(|client, _| {
+                    client.session != session || client_ids.contains(&client.client_id)
+                });
+                self.graph.retain_zellij_clients(&session, &client_ids);
             }
             AdapterMessage::NvimClosed { id } => {
                 self.nvim.remove(&id);

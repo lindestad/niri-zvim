@@ -102,7 +102,7 @@ pub(super) async fn run_bridge(
     let (refresh_tx, refresh_rx) = mpsc::unbounded_channel();
     let revisions = Arc::new(AtomicU64::new(0));
 
-    if let Ok(state) = query_snapshot(session, window_id, 0).await {
+    if let Ok(state) = query_snapshot(session, window_id).await {
         events
             .send(DaemonEvent::Adapter {
                 message: AdapterMessage::ZellijSnapshot { state },
@@ -124,9 +124,9 @@ pub(super) async fn run_bridge(
         refresh_rx,
     ));
 
-    let bind = serde_json::to_vec(&ProtocolMessage::new(DaemonMessage::BindNiriWindow {
-        window_id,
+    let bind = serde_json::to_vec(&ProtocolMessage::new(DaemonMessage::ZellijSync {
         session: session.to_owned(),
+        window_ids: vec![window_id],
     }))?;
     stdin.write_all(&bind).await?;
     stdin.write_u8(b'\n').await?;
@@ -137,8 +137,8 @@ pub(super) async fn run_bridge(
     tokio::spawn(async move {
         while let Some(message) = actions.recv().await {
             let sequence = match &message {
-                DaemonMessage::Navigate { sequence, .. } => Some(*sequence),
-                DaemonMessage::BindNiriWindow { .. } => None,
+                DaemonMessage::ZellijNavigate { sequence, .. } => Some(*sequence),
+                DaemonMessage::Navigate { .. } | DaemonMessage::ZellijSync { .. } => None,
             };
             let Ok(mut encoded) = serde_json::to_vec(&ProtocolMessage::new(message)) else {
                 continue;
@@ -164,8 +164,6 @@ pub(super) async fn run_bridge(
                 if let Some(sequence) = state.acknowledged_sequence {
                     let _ = refresh_tx.send(RefreshEvent::Acknowledge(sequence));
                 }
-                state.client.client_id = 0;
-                state.niri_window_id = window_id;
                 state.revision = revisions.fetch_add(1, Ordering::Relaxed) + 1;
                 events
                     .send(DaemonEvent::Adapter {
@@ -226,7 +224,7 @@ async fn fallback_refresh_loop(
                 () = &mut timer => {
                     state.pending_sequence = None;
                     state.metadata_dirty = false;
-                    let Ok(mut snapshot) = query_snapshot(&session, window_id, 0).await else {
+                    let Ok(mut snapshot) = query_snapshot(&session, window_id).await else {
                         break;
                     };
                     snapshot.revision = revisions.fetch_add(1, Ordering::Relaxed) + 1;
