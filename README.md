@@ -277,9 +277,10 @@ for release notes.
 ## Release process
 
 Finalize the version heading in `CHANGELOG.md`, run `just test`, and validate
-the tag metadata with `just release-check vX.Y.Z`. Publish `niri-zvim-core`
-before `niri-zvim` on crates.io, then create and push the matching annotated
-tag. The tag workflow repeats the complete nonvisual checks, builds and
-self-tests a host-targeted release archive, writes its SHA-256 file, and
-creates the GitHub release from the matching changelog section. Crates.io
-publishing is intentionally explicit and is not performed by GitHub Actions.
+the tag metadata with `just release-check vX.Y.Z`. After explicit release
+approval, create and push the matching annotated tag. The tag workflow repeats
+the complete nonvisual checks, builds and self-tests a host-targeted release
+archive, and writes its SHA-256 file before publishing anything. It then uses
+crates.io trusted publishing to release `niri-zvim-core` followed by
+`niri-zvim`; the Zellij WASM crate remains bundle-only. The GitHub release is
+created from the matching changelog section only after both crates succeed.
