@@ -8,20 +8,27 @@ live_tests_dir="$project_dir/scripts/live-tests"
 runtime_dir="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
 ghostty_config="$project_dir/tests/ghostty.config"
 terminal_fixture="$project_dir/tests/fixtures/terminal"
+warning_fixture="$project_dir/tests/fixtures/warning"
 nvim_fixture="$project_dir/tests/fixtures/nvim.lua"
 sample_bin="$project_dir/target/release/live-bench-sample"
 client_bin="$project_dir/target/release/niri-zvim"
+vim_niri_nav_dir="${VIM_NIRI_NAV_DIR:-$project_dir/../vim-niri-nav}"
+vim_niri_nav_script="$vim_niri_nav_dir/vim-niri-nav"
+vim_niri_nav_plugin="$vim_niri_nav_dir/plugin/vim-niri-nav.vim"
+vim_niri_nav_commit=""
+vim_niri_nav_unavailable=""
 tag="bench-$$"
 operation_timeout_seconds=3
 case_timeout_seconds=60
 case_state_file="$runtime_dir/niri-zvim-live-$tag.state"
 case_debug_file="$runtime_dir/niri-zvim-live-$tag.debug"
+warning_pid_file="$runtime_dir/niri-zvim-live-$tag-warning.pid"
 samples="${NIRI_ZVIM_BENCH_SAMPLES:-12}"
 burst_samples="${NIRI_ZVIM_BENCH_BURSTS:-6}"
 selected_backend="${1:-all}"
 
-if (($# > 1)) || [[ ! "$selected_backend" =~ ^(all|niri|zellij|nvim)$ ]]; then
-  echo "usage: scripts/bench-live [all|niri|zellij|nvim]" >&2
+if (($# > 1)) || [[ ! "$selected_backend" =~ ^(all|niri|zellij|nvim|vim-niri-nav)$ ]]; then
+  echo "usage: scripts/bench-live [all|niri|zellij|nvim|vim-niri-nav]" >&2
   exit 2
 fi
 
@@ -43,6 +50,24 @@ systemctl --user is-active --quiet niri-zvim.service || {
   exit 1
 }
 
+if ! command -v git >/dev/null; then
+  vim_niri_nav_unavailable="git is not installed"
+elif ! command -v alacritty >/dev/null; then
+  vim_niri_nav_unavailable="alacritty is not installed"
+elif [[ ! -x "$vim_niri_nav_script" ]]; then
+  vim_niri_nav_unavailable="$vim_niri_nav_script is not executable"
+elif [[ ! -r "$vim_niri_nav_plugin" ]]; then
+  vim_niri_nav_unavailable="$vim_niri_nav_plugin is not readable"
+elif ! vim_niri_nav_commit="$(git -C "$vim_niri_nav_dir" rev-parse HEAD 2>/dev/null)"; then
+  vim_niri_nav_unavailable="$vim_niri_nav_dir is not a Git checkout"
+elif [[ -n "$(git -C "$vim_niri_nav_dir" status --porcelain)" ]]; then
+  vim_niri_nav_unavailable="$vim_niri_nav_dir has uncommitted changes"
+fi
+if [[ "$selected_backend" == vim-niri-nav && -n "$vim_niri_nav_unavailable" ]]; then
+  echo "cannot run vim-niri-nav comparison: $vim_niri_nav_unavailable" >&2
+  exit 1
+fi
+
 original_window="$(niri msg --json focused-window | jq -r '.id // empty')"
 original_windows="$(niri msg --json windows)"
 original_workspaces="$(niri msg --json workspaces)"
@@ -55,8 +80,11 @@ source "$live_tests_dir/preservation.sh"
 test_start_cpu_strain="$(cpu_strain_snapshot)"
 
 restore_focus() {
+  if [[ -s "$warning_pid_file" ]]; then
+    kill "$(<"$warning_pid_file")" >/dev/null 2>&1 || true
+  fi
   niri msg action focus-window --id "$original_window" >/dev/null 2>&1 || true
-  rm -f "$case_state_file" "$case_debug_file"
+  rm -f "$case_state_file" "$case_debug_file" "$warning_pid_file"
 }
 finish() {
   local status="$?"
@@ -71,6 +99,31 @@ finish() {
 trap finish EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
+
+show_live_warning() {
+  local title="niri-zvim-live-$tag-warning"
+  local window pid
+  timeout --signal=TERM --kill-after=2s "${operation_timeout_seconds}s" \
+    ghostty +new-window \
+    --config-default-files=false \
+    --config-file="$ghostty_config" \
+    --font-size=18 \
+    --window-width=68 \
+    --window-height=7 \
+    -e "$warning_fixture" "$title" "$warning_pid_file" \
+    "NIRI-ZVIM LIVE BENCHMARK"
+  wait_for_file "$warning_pid_file"
+  window="$(wait_for_window "$title" exact)"
+  focus_niri_window "$window"
+  niri msg action move-window-to-floating >/dev/null
+  niri msg action center-window >/dev/null
+  sleep 2
+  pid="$(<"$warning_pid_file")"
+  kill "$pid" >/dev/null 2>&1 || true
+  wait_for_windows_gone "$window"
+  focus_niri_window "$original_window"
+  rm -f "$warning_pid_file"
+}
 
 report_series() {
   local label="$1"
@@ -111,6 +164,24 @@ report_comparison() {
   report_series "daemon observed focus" "${daemon_total_ref[@]}"
   report_series "native 2-step convergence" "${native_burst_ref[@]}"
   report_series "daemon 2-step convergence" "${daemon_burst_ref[@]}"
+}
+
+report_nvim_implementation_comparison() {
+  local -n native_dispatch_ref="$1" native_total_ref="$2"
+  local -n competitor_dispatch_ref="$3" competitor_total_ref="$4"
+  local -n daemon_dispatch_ref="$5" daemon_total_ref="$6"
+  local -n native_burst_ref="$7" competitor_burst_ref="$8" daemon_burst_ref="$9"
+  printf '\nNeovim implementation comparison (Alacritty)\n'
+  printf '  vim-niri-nav commit: %s\n' "$vim_niri_nav_commit"
+  report_series "native trigger completion" "${native_dispatch_ref[@]}"
+  report_series "native observed focus" "${native_total_ref[@]}"
+  report_series "vim-niri-nav trigger completion" "${competitor_dispatch_ref[@]}"
+  report_series "vim-niri-nav observed focus" "${competitor_total_ref[@]}"
+  report_series "niri-zvim trigger completion" "${daemon_dispatch_ref[@]}"
+  report_series "niri-zvim observed focus" "${daemon_total_ref[@]}"
+  report_series "native 2-step convergence" "${native_burst_ref[@]}"
+  report_series "vim-niri-nav 2-step convergence" "${competitor_burst_ref[@]}"
+  report_series "niri-zvim 2-step convergence" "${daemon_burst_ref[@]}"
 }
 
 bench_niri() (
@@ -217,7 +288,7 @@ bench_zellij() (
 
 bench_nvim() (
   local -a test_windows nvim_sockets zellij_sessions terminal_pid_files test_workspaces
-  local -a nd nt dd dt nb db
+  local -a windows nd nt dd dt nb db
   begin_case
   local prefix="niri-zvim-live-$tag-bench-nvim"
   local workspace="$prefix-workspace"
@@ -255,18 +326,80 @@ bench_nvim() (
   report_comparison "Neovim windows" nd nt dd dt nb db
 )
 
+bench_vim_niri_nav() (
+  local -a test_windows nvim_sockets zellij_sessions terminal_pid_files test_workspaces
+  local -a windows nd nt vd vt dd dt nb vb db
+  begin_case
+  local prefix="niri-zvim-live-$tag-bench-vim-niri-nav"
+  local workspace="$prefix-workspace"
+  local socket="$runtime_dir/$prefix.sock"
+  nvim_sockets+=("$socket")
+
+  focus_fresh_workspace
+  launch_test_terminal alacritty env \
+    NIRI_ZVIM_BENCH_VIM_PLUGIN="$vim_niri_nav_plugin" \
+    nvim -u "$nvim_fixture" --noplugin --listen "$socket" \
+    -c "set title titlestring=$prefix | set splitright | vsplit | vsplit"
+  wait_for_socket "$socket"
+  wait_for_nvim_count "$socket" 3
+  local window dispatch total _
+  window="$(wait_for_window "$prefix" exact)"
+  test_windows+=("$window")
+  name_focused_workspace "$workspace"
+  test_workspaces+=("$workspace")
+  mapfile -t windows < <(nvim_window_ids "$socket")
+  focus_niri_window "$window"
+  focus_nvim_window "$socket" "${windows[0]}"
+  export NIRI_ZVIM_BENCH_NVIM="$socket"
+  export NIRI_ZVIM_BENCH_VIM_NIRI_NAV="$vim_niri_nav_script"
+
+  # Validate and warm the external implementation before collecting samples.
+  measure nvim vim-niri-nav right "${windows[1]}" >/dev/null
+  focus_nvim_window "$socket" "${windows[0]}"
+
+  for _ in $(seq 1 "$samples"); do
+    focus_nvim_window "$socket" "${windows[0]}"
+    read -r dispatch total < <(measure nvim native right "${windows[1]}")
+    nd+=("$dispatch"); nt+=("$total")
+    read -r dispatch total < <(measure nvim native left "${windows[0]}")
+    nd+=("$dispatch"); nt+=("$total")
+  done
+  for _ in $(seq 1 "$samples"); do
+    focus_nvim_window "$socket" "${windows[0]}"
+    read -r dispatch total < <(measure nvim vim-niri-nav right "${windows[1]}")
+    vd+=("$dispatch"); vt+=("$total")
+    read -r dispatch total < <(measure nvim vim-niri-nav left "${windows[0]}")
+    vd+=("$dispatch"); vt+=("$total")
+  done
+  for _ in $(seq 1 "$samples"); do
+    focus_nvim_window "$socket" "${windows[0]}"
+    read -r dispatch total < <(measure nvim daemon right "${windows[1]}")
+    dd+=("$dispatch"); dt+=("$total")
+    read -r dispatch total < <(measure nvim daemon left "${windows[0]}")
+    dd+=("$dispatch"); dt+=("$total")
+  done
+  for _ in $(seq 1 "$burst_samples"); do
+    focus_nvim_window "$socket" "${windows[0]}"
+    read -r _ total < <(measure nvim native right "${windows[2]}" 2); nb+=("$total")
+    focus_nvim_window "$socket" "${windows[0]}"
+    read -r _ total < <(measure nvim vim-niri-nav right "${windows[2]}" 2); vb+=("$total")
+    focus_nvim_window "$socket" "${windows[0]}"
+    read -r _ total < <(measure nvim daemon right "${windows[2]}" 2); db+=("$total")
+  done
+  report_nvim_implementation_comparison nd nt vd vt dd dt nb vb db
+)
+
 cat <<'EOF'
-This benchmark opens disposable Ghostty windows and controls desktop focus.
+This benchmark opens disposable terminal windows and controls desktop focus.
 Do not use the keyboard or mouse until the final CPU-strain summary appears.
 Timings include trigger-process cost and authoritative polling overhead.
 They are descriptive distributions, not correctness thresholds.
 EOF
-printf 'Starting in 2 seconds with %s single samples and %s burst samples...\n' \
-  "$samples" "$burst_samples"
-sleep 2
-
 cargo build --quiet --release -p niri-zvim \
   --features live-bench --bin niri-zvim --bin live-bench-sample
+show_live_warning
+printf 'Starting with %s single samples and %s burst samples...\n' \
+  "$samples" "$burst_samples"
 if [[ "$selected_backend" == all || "$selected_backend" == niri ]]; then
   bench_niri
 fi
@@ -275,6 +408,14 @@ if [[ "$selected_backend" == all || "$selected_backend" == zellij ]]; then
 fi
 if [[ "$selected_backend" == all || "$selected_backend" == nvim ]]; then
   bench_nvim
+fi
+if [[ "$selected_backend" == all || "$selected_backend" == nvim ||
+  "$selected_backend" == vim-niri-nav ]]; then
+  if [[ -n "$vim_niri_nav_unavailable" ]]; then
+    test_skip "vim-niri-nav comparison ($vim_niri_nav_unavailable)"
+  else
+    bench_vim_niri_nav
+  fi
 fi
 test_original_desktop_preserved
 

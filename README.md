@@ -266,7 +266,8 @@ helpers and the individual scenario files live under `scripts/live-tests/`.
 The deterministic benchmark suite measures size-parameterized routing,
 topology construction, Unix socket dispatch, and the short-lived keypress
 client. `just bench-live` separately compares native and daemon-triggered Niri,
-Zellij, and Neovim focus convergence on the running desktop. See
+Zellij, and Neovim focus convergence on the running desktop, with an optional
+pinned `vim-niri-nav` comparison. See
 [the benchmarking documentation](https://github.com/lindestad/niri-zvim/blob/main/docs/benchmarking.md)
 for methodology and interpretation limits.
 

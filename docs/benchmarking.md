@@ -19,9 +19,10 @@ frame scheduling.
 
 ## Live comparative benchmarks
 
-`just bench-live` opens disposable Ghostty windows and compares native command
-paths with `niri-zvim` for Niri columns, Zellij panes, and Neovim windows. Do
-not use the keyboard or mouse until its final CPU-strain summary.
+`just bench-live` opens disposable terminal windows and compares native command
+paths with `niri-zvim` for Niri columns, Zellij panes, and Neovim windows. A
+floating warning appears for two seconds before desktop control begins. Do not
+use the keyboard or mouse until the final CPU-strain summary.
 
 Zellij's native and daemon populations use equivalent three-pane sessions,
 but separate instances. This prevents a native reset from racing the daemon's
@@ -41,6 +42,26 @@ The default is 12 single samples in each direction and 6 burst samples. Set
 change those counts. Pass `niri`, `zellij`, or `nvim` directly to
 `scripts/bench-live` to isolate one backend while investigating it.
 
+The Neovim selection also runs an optional three-way comparison with
+[`vim-niri-nav`](https://github.com/andergrim/vim-niri-nav). Place a clean Git
+checkout at `../vim-niri-nav`, relative to this repository, or set
+`VIM_NIRI_NAV_DIR` to its path. The comparison prints the exact competitor
+commit. If the checkout or Alacritty is missing, `all` and `nvim` skip that
+section; request it explicitly to make missing requirements an error:
+
+```console
+scripts/bench-live vim-niri-nav
+```
+
+All three implementations operate on the same three-split Neovim process and
+use the same reset, observation, and sample counts. The warm-up is excluded
+from results, and `vim-niri-nav` uses its normal timeout and discovery path.
+Alacritty gives that discovery path an unambiguous terminal-to-Neovim process
+tree. Ghostty normally shares one GTK process between windows, which can make
+the competitor select an unrelated Neovim process on a busy desktop. The GPL
+project is invoked from its checkout and is not vendored or linked into
+`niri-zvim`.
+
 Results include mean, p50, p95, p99, and maximum latency. They are descriptive,
 not correctness thresholds. The benchmark prints Linux load and CPU pressure
 at the start and end, including on failure, so a strained run is recognizable.
@@ -57,6 +78,10 @@ application keybinding:
   `list-clients`, whose process and session-query cost is substantial and is
   included equally in native and daemon totals.
 - Neovim uses its remote API to execute `wincmd` and query `win_getid()`.
+- The `vim-niri-nav` comparison measures its complete installed shell-command
+  path, including Niri focus lookup, process-tree discovery, and synchronous
+  Neovim RPC. The `niri-zvim` number measures its complete short-lived client
+  path to the already-running daemon.
 
 Trigger-completion numbers best show client and dispatch overhead. Observed
 focus numbers best represent practical external convergence, but include the

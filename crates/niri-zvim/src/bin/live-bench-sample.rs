@@ -54,6 +54,10 @@ fn trigger(backend: &str, mode: &str, direction: &str) -> anyhow::Result<ExitSta
                 .status()
                 .context("could not run niri-zvim")
         }
+        "vim-niri-nav" => Command::new(required_env("NIRI_ZVIM_BENCH_VIM_NIRI_NAV")?)
+            .arg(direction)
+            .status()
+            .context("could not run vim-niri-nav"),
         "native" => native_trigger(backend, direction),
         _ => anyhow::bail!("unknown mode {mode}"),
     }
