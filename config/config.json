@@ -15,7 +15,14 @@
     }
   },
   "zellij": {
-    "terminal_app_ids": ["com.mitchellh.ghostty"],
+    "terminal_app_ids": [
+      "com.mitchellh.ghostty",
+      "Alacritty",
+      "kitty",
+      "foot",
+      "footclient",
+      "org.wezfurlong.wezterm"
+    ],
     "session_title_separator": " | "
   }
 }

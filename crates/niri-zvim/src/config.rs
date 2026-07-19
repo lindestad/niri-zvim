@@ -5,6 +5,14 @@ use niri_zvim_core::Direction;
 use serde::{Deserialize, Serialize};
 
 pub(crate) const GHOSTTY_APP_ID: &str = "com.mitchellh.ghostty";
+pub(crate) const DEFAULT_TERMINAL_APP_IDS: &[&str] = &[
+    GHOSTTY_APP_ID,
+    "Alacritty",
+    "kitty",
+    "foot",
+    "footclient",
+    "org.wezfurlong.wezterm",
+];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 pub enum NiriNavigation {
@@ -74,7 +82,10 @@ pub(crate) struct ZellijDiscovery {
 impl Default for ZellijDiscovery {
     fn default() -> Self {
         Self {
-            terminal_app_ids: vec![GHOSTTY_APP_ID.into()],
+            terminal_app_ids: DEFAULT_TERMINAL_APP_IDS
+                .iter()
+                .map(|app_id| (*app_id).into())
+                .collect(),
             session_title_separator: " | ".into(),
         }
     }
@@ -182,6 +193,10 @@ mod tests {
         assert_eq!(
             config.zellij_discovery().unwrap(),
             &ZellijDiscovery::default()
+        );
+        assert_eq!(
+            config.zellij_discovery().unwrap().terminal_app_ids,
+            DEFAULT_TERMINAL_APP_IDS
         );
     }
 
