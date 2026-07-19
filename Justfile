@@ -27,6 +27,6 @@ test:
 package:
     ./scripts/package-release
 
-# Validate release metadata against a version tag such as v0.2.0.
+# Validate release metadata against a version tag such as v0.3.0.
 release-check tag:
     ./scripts/release-check {{tag}}

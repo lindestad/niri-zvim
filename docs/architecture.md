@@ -57,7 +57,7 @@ Neovim instance.
 Native control connections and adapter connections carry an exact protocol
 version in their binary prelude. Persistent Neovim and Zellij JSON messages are
 also nested in a versioned envelope. The daemon and adapters reject mismatched
-versions; 0.2 does not reinterpret the unversioned 0.1 wire format.
+versions and do not reinterpret the unversioned 0.1 wire format.
 
 The same control prelude reserves opcode zero for status queries. The daemon
 answers with a versioned JSON snapshot of its graph, executor connections, and
@@ -100,14 +100,17 @@ no neighbor; they do not alter nested routing.
 ## Live transition tests
 
 The opt-in `scripts/test-live` harness launches disposable Ghostty surfaces for
-direct Neovim and Zellij. Each scenario records the initial nested focus,
-sends the normal versioned navigation client message, queries authoritative
-Neovim RPC or Zellij JSON state, and compares the resulting nested and Niri
-focus with the expected transition. Burst scenarios also send complete direct,
-Zellij, and nested paths without waiting between commands, then verify every
-layer after one final convergence wait. Pure graph tests cover the same routing
-invariants without requiring a compositor. See [live-testing.md](live-testing.md)
-for fixture design, race regressions, and diagnostics.
+the exhaustive direct Neovim and Zellij scenarios. Optional portability cases
+put one Alacritty, Kitty, Foot, or WezTerm Zellij client between Ghostty
+boundaries and exercise both routing layers; an unavailable optional terminal
+is skipped. Each scenario records the initial nested focus, sends the normal
+versioned navigation client message, queries authoritative Neovim RPC or
+Zellij JSON state, and compares the resulting nested and Niri focus with the
+expected transition. Burst scenarios also send complete direct, Zellij, and
+nested paths without waiting between commands, then verify every layer after
+one final convergence wait. Pure graph tests cover the same routing invariants
+without requiring a compositor. See [live-testing.md](live-testing.md) for
+fixture design, race regressions, and diagnostics.
 
 ## Identity
 
@@ -115,5 +118,6 @@ Niri windows use compositor window IDs. Zellij clients use session name plus
 client ID. Neovim instances use a generated token and declare either a Niri
 window or a Zellij client/pane as their parent. A direct Neovim instance may
 claim the focused Niri window only while its terminal reports `FocusGained`;
-this keeps multiple Ghostty surfaces distinct even though GTK single-instance
-mode gives them the same process ID. No process-tree inference is used.
+this keeps terminal surfaces distinct even when they share a process, as
+Ghostty surfaces do in GTK single-instance mode. No process-tree inference is
+used.

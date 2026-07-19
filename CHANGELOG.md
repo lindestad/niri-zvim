@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.3.0
+
+- Recognize Ghostty, Alacritty, Kitty, Foot/Footclient, and WezTerm by default
+  while keeping terminal discovery configurable by exact Wayland app ID.
+- Add real-desktop navigation smoke tests for every supported Zellij terminal;
+  optional terminals that are not installed are skipped rather than required.
+- Make doctor terminal-neutral and report only definite dynamic-title
+  conflicts found in installed Ghostty, Alacritty, and Foot configuration.
+- Document the dynamic-title contract and the one-Zellij-client-per-Wayland-
+  toplevel boundary for both built-in and custom terminal support.
+
 ## 0.2.0
 
 - Version the navigation and adapter wire protocols and reject mismatched

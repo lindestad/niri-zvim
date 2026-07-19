@@ -3,9 +3,9 @@
 State-synchronized directional navigation across niri windows, Zellij panes,
 and Neovim splits.
 
-Version 0.2 is an enthusiast release for the current niri, Zellij, and Neovim
-stack documented below. Zellij discovery accepts configured terminal app IDs
-and title separators; Ghostty remains the tested default. See
+Version 0.3 is an enthusiast release for the current niri, Zellij, and Neovim
+stack documented below. Zellij navigation is live-tested in Ghostty, Alacritty,
+Kitty, Foot, and WezTerm. See
 [support and compatibility](https://github.com/lindestad/niri-zvim/blob/main/docs/support.md)
 before installing.
 
@@ -27,8 +27,8 @@ for the desktop race tests and lessons from their fixtures.
 
 ## Install
 
-The complete integration requires niri 26.04, Zellij 0.44.3, Neovim
-0.12.4, Ghostty's GTK build, Rust 1.97.1 or newer, Just, and systemd user
+The complete integration requires niri 26.04, Zellij 0.44.3, Neovim 0.12.4,
+one supported Wayland terminal, Rust 1.97.1 or newer, Just, and systemd user
 services. From a source checkout, install the binaries, adapters, and daemon
 with:
 
@@ -80,7 +80,7 @@ session, run:
       file:$HOME/.config/zellij/plugins/niri-zvim.wasm
 
 Approve the prompt. The plugin then hides itself; later sessions are connected
-automatically when the daemon sees their Ghostty window.
+automatically when the daemon sees their terminal window.
 
 Bind the compositor keys to the client:
 
@@ -89,14 +89,13 @@ Bind the compositor keys to the client:
     Mod+Up    { spawn "niri-zvim" "up"; }
     Mod+Right { spawn "niri-zvim" "right"; }
 
-For systemd-managed Ghostty, launch terminal windows with `ghostty +new-window`.
-Do not disable Ghostty's GTK single-instance mode.
-
 The Zellij bridge does not require a visible title bar. It reads the Wayland
-app ID and window title reported by niri. The default setup expects Ghostty's
-app ID to be `com.mitchellh.ghostty` and the title to be either the Zellij
-session name or `<session> | <command>`. Hiding client-side decorations is
-fine; overriding the terminal title with a static value prevents discovery.
+app ID and window title reported by niri. The defaults recognize Ghostty,
+Alacritty, Kitty, Foot/Footclient, and WezTerm. The title must be either the
+Zellij session name or `<session> | <command>`. Hiding client-side decorations
+is fine; overriding the terminal title with a static value prevents discovery.
+Each Zellij client must occupy its own Wayland toplevel; terminal-native tabs
+and splits are outside niri-zvim's graph.
 
 ## Navigation modes
 
@@ -124,7 +123,14 @@ The installed config selects the `desktop` mode, matching this layout:
     }
   },
   "zellij": {
-    "terminal_app_ids": ["com.mitchellh.ghostty"],
+    "terminal_app_ids": [
+      "com.mitchellh.ghostty",
+      "Alacritty",
+      "kitty",
+      "foot",
+      "footclient",
+      "org.wezfurlong.wezterm"
+    ],
     "session_title_separator": " | "
   }
 }
@@ -149,12 +155,23 @@ its first occurrence; the part before it is treated as the session name. A
 title without the separator is treated as the complete session name. In both
 cases a same-named Zellij session socket must exist before a bridge is opened.
 
-The defaults match Ghostty with Zellij-managed titles. Another terminal can be
-used when niri reports a stable app ID and its title preserves the Zellij
-session name. Inspect both with `niri msg --json windows`, change the two
-fields, and restart `niri-zvim.service`. Discovery configuration selects
-windows and derives session names; it does not launch or reconfigure the
-terminal.
+The defaults contain the tested terminals' normal Wayland app IDs. Another
+terminal can be used when niri reports a stable app ID and its title preserves
+the Zellij session name. Inspect both with `niri msg --json windows` and add the
+app ID to the allowlist. Valid configuration changes are applied without a
+service restart. Discovery configuration selects windows and derives session
+names; it does not launch or reconfigure the terminal.
+
+The installer preserves an existing config. An installation upgraded from 0.2
+therefore keeps its previous Ghostty-only allowlist until the additional app IDs
+above are added explicitly.
+
+Terminal-specific settings can defeat discovery. Do not set Ghostty's `title`,
+Alacritty's `window.dynamic_title = false`, Kitty's `--title` or
+`os_window_title`, Foot's `locked-title`, or a WezTerm `format-window-title`
+hook that removes the active pane title. `niri-zvim doctor` reports definite
+conflicts it finds in installed Ghostty, Alacritty, and Foot config files. It
+stays silent when a terminal or config file is absent.
 
 Several terminal windows may attach to one Zellij session. The daemon pairs
 Zellij client IDs with Niri window IDs in creation order and targets the
@@ -185,10 +202,12 @@ Diagnose the complete installation without changing it:
 Doctor validates the config and exact supported niri, Zellij, and Neovim
 versions; checks the Niri and private daemon sockets; queries the running daemon
 and systemd user services; verifies the Zellij WASM and Neovim runtime files;
-and reports whether the configured plugin has its four required Zellij
-permissions. Failed required checks produce a non-zero exit status. Missing
-Zellij approval is a warning because approving the normal first-use prompt can
-complete that step without reinstalling.
+reports whether the configured plugin has its four required Zellij permissions;
+and warns about installed terminal settings that definitely suppress dynamic
+titles. Missing terminal binaries and config files are not findings. Failed
+required checks produce a non-zero exit status. Missing Zellij approval is a
+warning because approving the normal first-use prompt can complete that step
+without reinstalling.
 
 ## Development
 
@@ -211,10 +230,12 @@ For individual Rust checks, run:
     cargo clippy --workspace --all-targets --all-features --exclude niri-zvim-zellij -- -D warnings
     cargo clippy -p niri-zvim-zellij --target wasm32-wasip1 -- -D warnings
 
-The live part launches disposable Ghostty windows with an isolated test config.
-Immediately before it takes desktop control, it shows a small two-second
-Ghostty warning and restores the previously focused window when the warning
-closes.
+The exhaustive live scenarios launch disposable Ghostty windows with an
+isolated test config. Optional portability scenarios launch one disposable
+Alacritty, Kitty, Foot, and WezTerm Zellij client apiece; a missing optional
+terminal is reported as `SKIP`, not a failure. Immediately before the suite
+takes desktop control, it shows a small two-second Ghostty warning and restores
+the previously focused window when the warning closes.
 Disposable Zellij sessions use an isolated permission cache that grants the
 repository's plugin only the four permissions documented above; the user's
 Zellij permission cache is not read or changed. Their session metadata remains
@@ -236,7 +257,8 @@ current Niri, Zellij, Neovim, and process state before cleanup. Set
 Neovim instances use a minimal init from the repository rather than the user's
 configuration. The disposable Zellij cache also suppresses release notes so a
 first-run plugin pane cannot masquerade as a terminal client. Run one case in
-isolation with, for example, `scripts/test-live tabs`.
+isolation with, for example, `scripts/test-live tabs`, or run only the optional
+terminal matrix with `scripts/test-live terminals`.
 
 `scripts/test-live` handles preflight checks and orchestration. Shared fixture
 helpers and the individual scenario files live under `scripts/live-tests/`.

@@ -54,6 +54,15 @@ targeted move never changes the other client's focus. Its isolated Zellij
 cache pre-approves only the plugin's required permissions and marks the current
 release notes as seen so first-run UI cannot replace a terminal client.
 
+The terminal portability matrix launches one disposable Alacritty, Kitty,
+Foot, or WezTerm client for each installed binary. Every case uses an isolated
+daemon configured with only that terminal's normal Wayland app ID and starts
+the terminal with an isolated config that preserves dynamic titles. A
+two-pane Zellij session sits between Ghostty boundary windows, and the case
+traverses both Zellij panes and both compositor edges in both directions.
+Missing optional terminal binaries produce `SKIP`, so contributors do not need
+to install the whole matrix.
+
 ## Problems found while building the suite
 
 Niri's `tile_pos_in_workspace_view` is optional and may be absent even for a
@@ -130,8 +139,8 @@ processes instead.
 
 Test Neovim instances use `tests/fixtures/nvim.lua`, not the user's config.
 This avoids plugins, file browsers, mappings, and asynchronous startup work
-changing window topology or timing. Zellij and Ghostty are isolated in the
-same spirit wherever their interfaces permit it.
+changing window topology or timing. Zellij and every terminal fixture are
+isolated in the same spirit wherever their interfaces permit it.
 
 ## Deadlines and diagnostics
 
@@ -153,5 +162,9 @@ Run all tests with `just test`, or isolate a live scenario while debugging:
     scripts/test-live consumed-zellij
     scripts/test-live consumed-reflow
     scripts/test-live consumed-nvim
+    scripts/test-live terminals
+
+Run one portability case with `scripts/test-live terminal-kitty`, replacing
+`kitty` with `alacritty`, `foot`, or `wezterm` as needed.
 
 Do not interact with the desktop until the final summary appears.
