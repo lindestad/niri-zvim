@@ -24,6 +24,10 @@ paths with `niri-zvim` for Niri columns, Zellij panes, and Neovim windows. A
 floating warning appears for two seconds before desktop control begins. Do not
 use the keyboard or mouse until the final CPU-strain summary.
 
+The runner refuses to start while the login session is locked or no normal
+Niri window is focused. This keeps a hidden lock or layer-shell surface from
+turning the warning and later focus assertions into misleading failures.
+
 Zellij's native and daemon populations use equivalent three-pane sessions,
 but separate instances. This prevents a native reset from racing the daemon's
 optimistic acknowledgement queue. Resets and fixture synchronization happen
