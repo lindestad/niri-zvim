@@ -23,11 +23,11 @@ warning_pid_file="$runtime_dir/niri-zvim-live-$tag-warning.pid"
 source "$project_dir/scripts/test-output"
 
 if (($# > 1)); then
-  echo "usage: scripts/test-live [all|direct|tabs|zellij-one|zellij-three|zellij-multi|discovery|nested|consumed|consumed-zellij|consumed-reflow|consumed-nvim|workspaces]" >&2
+  echo "usage: scripts/test-live [all|terminals|terminal-alacritty|terminal-kitty|terminal-foot|terminal-wezterm|direct|tabs|zellij-one|zellij-three|zellij-multi|discovery|nested|consumed|consumed-zellij|consumed-reflow|consumed-nvim|workspaces]" >&2
   exit 2
 fi
 case "$selected_case" in
-  all | direct | tabs | zellij-one | zellij-three | zellij-multi | discovery | nested | consumed | consumed-zellij | consumed-reflow | consumed-nvim | workspaces) ;;
+  all | terminals | terminal-alacritty | terminal-kitty | terminal-foot | terminal-wezterm | direct | tabs | zellij-one | zellij-three | zellij-multi | discovery | nested | consumed | consumed-zellij | consumed-reflow | consumed-nvim | workspaces) ;;
   *)
     echo "unknown live test case: $selected_case" >&2
     exit 2
@@ -109,6 +109,8 @@ source "$live_tests_dir/zellij-three.sh"
 source "$live_tests_dir/zellij-multi.sh"
 # shellcheck source=scripts/live-tests/discovery.sh
 source "$live_tests_dir/discovery.sh"
+# shellcheck source=scripts/live-tests/terminal-smoke.sh
+source "$live_tests_dir/terminal-smoke.sh"
 # shellcheck source=scripts/live-tests/nested.sh
 source "$live_tests_dir/nested.sh"
 # shellcheck source=scripts/live-tests/consumed-zellij.sh
@@ -201,6 +203,19 @@ fi
 if [[ "$selected_case" == all || "$selected_case" == discovery ]]; then
   run_case "configuration reload and terminal discovery" test_configured_terminal_discovery
 fi
+for terminal in alacritty kitty foot wezterm; do
+  if [[ "$selected_case" != all && "$selected_case" != terminals &&
+    "$selected_case" != "terminal-$terminal" ]]; then
+    continue
+  fi
+  terminal_binary="$(terminal_command "$terminal")"
+  if ! command -v "$terminal_binary" >/dev/null; then
+    test_skip "$terminal navigation smoke ($terminal_binary is not installed)"
+    continue
+  fi
+  run_case "$terminal Zellij navigation smoke" \
+    "test_terminal_navigation_smoke $terminal"
+done
 if [[ "$selected_case" == all || "$selected_case" == nested ]]; then
   run_case "nested Neovim in Zellij traversal" test_nested_nvim_in_zellij
 fi

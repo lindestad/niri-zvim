@@ -4,6 +4,8 @@
 
 common_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/common" && pwd)"
 
+# shellcheck source=scripts/live-tests/common/terminals.sh
+source "$common_dir/terminals.sh"
 # shellcheck source=scripts/live-tests/common/diagnostics.sh
 source "$common_dir/diagnostics.sh"
 # shellcheck source=scripts/live-tests/common/fixtures.sh

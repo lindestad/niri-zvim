@@ -33,6 +33,8 @@ shellcheck -x \
   scripts/test \
   scripts/test-live \
   scripts/test-output \
+  scripts/live-tests/common/terminals.sh \
+  scripts/live-tests/terminal-smoke.sh \
   tests/fixtures/terminal \
   tests/fixtures/zellij-attach \
   tests/fixtures/warning
