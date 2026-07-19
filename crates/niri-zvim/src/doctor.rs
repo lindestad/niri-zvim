@@ -8,7 +8,7 @@ use std::{
 use serde::Serialize;
 
 use crate::{
-    config::{Config, GHOSTTY_APP_ID, config_path},
+    config::{Config, config_path},
     request_status,
     socket::socket_path,
     zellij::configured_plugin_path,
@@ -17,7 +17,6 @@ use crate::{
 const NIRI_VERSION: &str = "26.04";
 const ZELLIJ_VERSION: &str = "0.44.3";
 const NVIM_VERSION: &str = "0.12.4";
-const GHOSTTY_VERSION_PREFIX: &str = "1.3.";
 const ZELLIJ_PERMISSIONS: &[&str] = &[
     "ReadApplicationState",
     "ChangeApplicationState",
@@ -90,7 +89,7 @@ impl DoctorReport {
 
 pub fn doctor_report() -> DoctorReport {
     let mut checks = Vec::new();
-    let uses_default_ghostty = check_config(&mut checks);
+    check_config(&mut checks);
     check_version(
         &mut checks,
         "niri version",
@@ -128,31 +127,7 @@ pub fn doctor_report() -> DoctorReport {
         },
     );
     check_neovim_adapter(&mut checks);
-    if uses_default_ghostty {
-        check_version_prefix(
-            &mut checks,
-            "ghostty version",
-            "ghostty",
-            &["+version"],
-            GHOSTTY_VERSION_PREFIX,
-            |output| {
-                output
-                    .lines()
-                    .find_map(|line| line.trim().strip_prefix("- version: ").map(str::to_owned))
-            },
-        );
-        check_service(
-            &mut checks,
-            "ghostty service",
-            "app-com.mitchellh.ghostty.service",
-        );
-    } else {
-        warning(
-            &mut checks,
-            "terminal runtime",
-            "custom Zellij app IDs configured; verify their titles with `niri msg windows`",
-        );
-    }
+    check_terminal_configs(&mut checks);
     let healthy = checks.iter().all(|check| check.level != DoctorLevel::Fail);
     DoctorReport {
         version: env!("CARGO_PKG_VERSION").into(),
@@ -161,7 +136,7 @@ pub fn doctor_report() -> DoctorReport {
     }
 }
 
-fn check_config(checks: &mut Vec<DoctorCheck>) -> bool {
+fn check_config(checks: &mut Vec<DoctorCheck>) {
     let path = config_path();
     if !path.exists() {
         warning(
@@ -169,7 +144,7 @@ fn check_config(checks: &mut Vec<DoctorCheck>) -> bool {
             "config",
             format!("{} is missing; using built-in defaults", path.display()),
         );
-        return true;
+        return;
     }
     match Config::load_validated().and_then(|config| {
         let mode = config.active_mode_name().to_owned();
@@ -186,11 +161,9 @@ fn check_config(checks: &mut Vec<DoctorCheck>) -> bool {
                     app_ids.join(", ")
                 ),
             );
-            app_ids.iter().any(|app_id| app_id == GHOSTTY_APP_ID)
         }
         Err(error) => {
             fail(checks, "config", error.to_string());
-            true
         }
     }
 }
@@ -379,6 +352,169 @@ fn missing_zellij_permissions(contents: &str, plugin: &Path) -> Option<Vec<&'sta
     )
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct TerminalConfigFinding {
+    line: usize,
+    message: &'static str,
+}
+
+fn check_terminal_configs(checks: &mut Vec<DoctorCheck>) {
+    let config = config_home();
+    let home = env::var_os("HOME").map(PathBuf::from);
+
+    if command_exists("ghostty") {
+        let mut paths = vec![
+            config.join("ghostty/config"),
+            config.join("ghostty/config.ghostty"),
+        ];
+        if let Some(home) = &home {
+            paths.push(home.join(".config/ghostty/config"));
+            paths.push(home.join(".config/ghostty/config.ghostty"));
+        }
+        check_terminal_config(checks, &paths, ghostty_config_findings);
+    }
+
+    if command_exists("alacritty") {
+        let mut paths = vec![
+            config.join("alacritty/alacritty.toml"),
+            config.join("alacritty.toml"),
+        ];
+        if let Some(home) = &home {
+            paths.push(home.join(".config/alacritty/alacritty.toml"));
+            paths.push(home.join(".alacritty.toml"));
+        }
+        check_terminal_config(checks, &paths, alacritty_config_findings);
+    }
+
+    if command_exists("foot") {
+        let mut paths = vec![config.join("foot/foot.ini")];
+        if let Some(home) = &home {
+            paths.push(home.join(".config/foot/foot.ini"));
+        }
+        check_terminal_config(checks, &paths, foot_config_findings);
+    }
+}
+
+fn check_terminal_config(
+    checks: &mut Vec<DoctorCheck>,
+    paths: &[PathBuf],
+    inspect: fn(&str) -> Vec<TerminalConfigFinding>,
+) {
+    let Some(path) = paths.iter().find(|path| path.is_file()) else {
+        return;
+    };
+    let Ok(contents) = fs::read_to_string(path) else {
+        return;
+    };
+    for finding in inspect(&contents) {
+        warning(
+            checks,
+            "terminal config",
+            format!("{}:{}: {}", path.display(), finding.line, finding.message),
+        );
+    }
+}
+
+fn ghostty_config_findings(contents: &str) -> Vec<TerminalConfigFinding> {
+    key_value_lines(contents)
+        .filter(|(_, section, key, value)| {
+            section.is_empty() && *key == "title" && !empty_config_value(value)
+        })
+        .map(|(line, _, _, _)| TerminalConfigFinding {
+            line,
+            message: "title fixes the window title and prevents Zellij session discovery",
+        })
+        .collect()
+}
+
+fn alacritty_config_findings(contents: &str) -> Vec<TerminalConfigFinding> {
+    key_value_lines(contents)
+        .filter(|(_, section, key, value)| {
+            ((*section == "window" && *key == "dynamic_title")
+                || (section.is_empty() && *key == "window.dynamic_title"))
+                && value.trim() == "false"
+        })
+        .map(|(line, _, _, _)| TerminalConfigFinding {
+            line,
+            message: "window.dynamic_title = false prevents Zellij session discovery",
+        })
+        .collect()
+}
+
+fn foot_config_findings(contents: &str) -> Vec<TerminalConfigFinding> {
+    key_value_lines(contents)
+        .filter(|(_, section, key, value)| {
+            (section.is_empty() || *section == "main")
+                && *key == "locked-title"
+                && matches!(
+                    value.trim().to_ascii_lowercase().as_str(),
+                    "yes" | "true" | "on" | "1"
+                )
+        })
+        .map(|(line, _, _, _)| TerminalConfigFinding {
+            line,
+            message: "locked-title prevents Zellij session discovery",
+        })
+        .collect()
+}
+
+fn key_value_lines(contents: &str) -> impl Iterator<Item = (usize, &str, &str, &str)> {
+    let mut section = "";
+    contents
+        .lines()
+        .enumerate()
+        .filter_map(move |(index, raw)| {
+            let line = uncommented(raw).trim();
+            if line.starts_with('[') && line.ends_with(']') {
+                section = line[1..line.len() - 1].trim();
+                return None;
+            }
+            let (key, value) = line.split_once('=')?;
+            Some((index + 1, section, key.trim(), value.trim()))
+        })
+}
+
+fn uncommented(line: &str) -> &str {
+    let mut quote = None;
+    let mut escaped = false;
+    for (index, character) in line.char_indices() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        if character == '\\' && quote == Some('"') {
+            escaped = true;
+            continue;
+        }
+        if matches!(character, '\'' | '"') {
+            if quote == Some(character) {
+                quote = None;
+            } else if quote.is_none() {
+                quote = Some(character);
+            }
+            continue;
+        }
+        if character == '#' && quote.is_none() {
+            return &line[..index];
+        }
+    }
+    line
+}
+
+fn empty_config_value(value: &str) -> bool {
+    matches!(value.trim(), "" | "\"\"" | "''")
+}
+
+fn command_exists(command: &str) -> bool {
+    env::var_os("PATH").is_some_and(|path| {
+        env::split_paths(&path).any(|directory| {
+            fs::metadata(directory.join(command)).is_ok_and(|metadata| {
+                metadata.is_file() && metadata.permissions().mode() & 0o111 != 0
+            })
+        })
+    })
+}
+
 fn check_neovim_adapter(checks: &mut Vec<DoctorCheck>) {
     let site = data_home().join("nvim/site");
     let files = [
@@ -444,25 +580,6 @@ fn check_version<F>(
     });
 }
 
-fn check_version_prefix<F>(
-    checks: &mut Vec<DoctorCheck>,
-    name: &str,
-    command: &str,
-    arguments: &[&str],
-    expected_prefix: &str,
-    parse: F,
-) where
-    F: FnOnce(&str) -> Option<String>,
-{
-    check_version_with(checks, name, command, arguments, parse, |found| {
-        if found.starts_with(expected_prefix) {
-            Ok(found.to_owned())
-        } else {
-            Err(format!("found {found}, expected {expected_prefix}x"))
-        }
-    });
-}
-
 fn check_version_with<F, V>(
     checks: &mut Vec<DoctorCheck>,
     name: &str,
@@ -502,6 +619,14 @@ fn output_text(output: &Output) -> String {
     let mut text = String::from_utf8_lossy(&output.stdout).into_owned();
     text.push_str(&String::from_utf8_lossy(&output.stderr));
     text
+}
+
+fn config_home() -> PathBuf {
+    env::var_os("XDG_CONFIG_HOME")
+        .filter(|path| !path.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))
+        .unwrap_or_else(|| PathBuf::from("."))
 }
 
 fn cache_home() -> PathBuf {
@@ -581,6 +706,59 @@ mod tests {
                 "ChangeApplicationState",
                 "ReadSessionEnvironmentVariables"
             ])
+        );
+    }
+
+    #[test]
+    fn ghostty_config_reports_only_a_fixed_nonempty_title() {
+        let contents = r#"
+# title = ignored
+title =
+title = ""
+title = "project # fixed"
+"#;
+        assert_eq!(
+            ghostty_config_findings(contents),
+            vec![TerminalConfigFinding {
+                line: 5,
+                message: "title fixes the window title and prevents Zellij session discovery",
+            }]
+        );
+    }
+
+    #[test]
+    fn alacritty_config_reports_disabled_dynamic_titles() {
+        let section = r#"
+[window]
+dynamic_title = false # incompatible
+title = "static initial title"
+"#;
+        assert_eq!(
+            alacritty_config_findings(section),
+            vec![TerminalConfigFinding {
+                line: 3,
+                message: "window.dynamic_title = false prevents Zellij session discovery",
+            }]
+        );
+
+        let dotted = "window.dynamic_title = false\n";
+        assert_eq!(alacritty_config_findings(dotted).len(), 1);
+        assert!(alacritty_config_findings("[window]\ndynamic_title = true\n").is_empty());
+    }
+
+    #[test]
+    fn foot_config_reports_only_enabled_title_locking() {
+        let contents = r#"
+[main]
+locked-title=no
+locked-title = YES
+"#;
+        assert_eq!(
+            foot_config_findings(contents),
+            vec![TerminalConfigFinding {
+                line: 4,
+                message: "locked-title prevents Zellij session discovery",
+            }]
         );
     }
 }
