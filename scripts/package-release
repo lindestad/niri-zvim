@@ -62,6 +62,9 @@ install -m 0755 \
 install -m 0755 \
   "$project_dir/target/release-bundle/release/niri-zvimd" \
   "$root/payload/bin/niri-zvimd"
+install -m 0755 \
+  "$project_dir/target/release-bundle/release/niri-zvim-zellij-bridge" \
+  "$root/payload/bin/niri-zvim-zellij-bridge"
 install -m 0644 \
   "$project_dir/target/wasm32-wasip1/release/niri-zvim-zellij.wasm" \
   "$root/payload/zellij/niri-zvim.wasm"

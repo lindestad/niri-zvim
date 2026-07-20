@@ -14,6 +14,41 @@ use niri_zvim_core::{
 fn clients_report_the_package_version() {
     assert_version("niri-zvim", env!("CARGO_BIN_EXE_niri-zvim"));
     assert_version("niri-zvimd", env!("CARGO_BIN_EXE_niri-zvimd"));
+    assert_version(
+        "niri-zvim-zellij-bridge",
+        env!("CARGO_BIN_EXE_niri-zvim-zellij-bridge"),
+    );
+}
+
+#[test]
+fn zellij_bridge_requires_an_explicit_forwarded_socket() {
+    let output = Command::new(env!("CARGO_BIN_EXE_niri-zvim-zellij-bridge"))
+        .env_remove("NIRI_ZVIM_SOCKET")
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8(output.stderr)
+            .unwrap()
+            .contains("NIRI_ZVIM_SOCKET must name the SSH-forwarded local daemon socket")
+    );
+}
+
+#[test]
+fn zellij_bridge_requires_a_zellij_client() {
+    let output = Command::new(env!("CARGO_BIN_EXE_niri-zvim-zellij-bridge"))
+        .env("NIRI_ZVIM_SOCKET", "/run/user/1/forwarded.sock")
+        .env_remove("ZELLIJ_SESSION_NAME")
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8(output.stderr)
+            .unwrap()
+            .contains("ZELLIJ_SESSION_NAME is required")
+    );
 }
 
 fn assert_version(name: &str, executable: &str) {

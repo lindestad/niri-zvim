@@ -44,6 +44,10 @@ name = "niri-zvimd"
 path = "src/bin/daemon.rs"
 
 [[bin]]
+name = "niri-zvim-zellij-bridge"
+path = "src/bin/zellij-bridge.rs"
+
+[[bin]]
 name = "live-bench-sample"
 path = "src/bin/live-bench-sample.rs"
 required-features = ["live-bench"]

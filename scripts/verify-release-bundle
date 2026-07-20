@@ -50,6 +50,7 @@ HOME="$home" XDG_CONFIG_HOME="$config_home" XDG_DATA_HOME="$data_home" \
 
 "$home/.local/bin/niri-zvim" --version >/dev/null
 "$home/.local/bin/niri-zvimd" --version >/dev/null
+"$home/.local/bin/niri-zvim-zellij-bridge" --version >/dev/null
 [[ -s "$config_home/zellij/plugins/niri-zvim.wasm" ]]
 [[ -f "$config_home/niri-zvim/config.json" ]]
 [[ -f "$config_home/systemd/user/niri-zvim.service" ]]

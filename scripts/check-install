@@ -45,6 +45,9 @@ install -m 0755 "$project_dir/scripts/install" "$bundle/install"
 install -m 0644 "$project_dir/scripts/lib/install.sh" "$bundle/lib/install.sh"
 install -m 0755 "$project_dir/tests/fixtures/terminal" "$bundle/payload/bin/niri-zvim"
 install -m 0755 "$project_dir/tests/fixtures/terminal" "$bundle/payload/bin/niri-zvimd"
+install -m 0755 \
+  "$project_dir/tests/fixtures/terminal" \
+  "$bundle/payload/bin/niri-zvim-zellij-bridge"
 install -m 0644 "$project_dir/config/config.json" "$bundle/payload/config/config.json"
 install -m 0644 \
   "$project_dir/nvim/lua/niri-zvim/init.lua" \
@@ -61,6 +64,7 @@ HOME="$home" XDG_CONFIG_HOME="$config_home" XDG_DATA_HOME="$data_home" \
   "$bundle/install" --no-service >/dev/null
 
 [[ -x "$home/.local/bin/niri-zvim" ]]
+[[ -x "$home/.local/bin/niri-zvim-zellij-bridge" ]]
 [[ -f "$config_home/zellij/plugins/niri-zvim.wasm" ]]
 [[ -f "$config_home/systemd/user/niri-zvim.service" ]]
 [[ -f "$config_home/niri-zvim/config.json" ]]
