@@ -210,6 +210,11 @@ pub enum DaemonMessage {
         session: String,
         window_ids: Vec<u64>,
     },
+    ZellijSyncClient {
+        session: String,
+        graph_session: String,
+        window_id: u64,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -344,6 +349,21 @@ mod tests {
             },
         };
         assert_eq!(stale.into_current().unwrap_err().received, 0);
+    }
+
+    #[test]
+    fn forwarded_zellij_binding_is_explicit() {
+        let encoded = serde_json::to_value(ProtocolMessage::new(DaemonMessage::ZellijSyncClient {
+            session: "work".into(),
+            graph_session: "ssh:a1b2:work".into(),
+            window_id: 42,
+        }))
+        .unwrap();
+
+        assert_eq!(encoded["message"]["type"], "zellij_sync_client");
+        assert_eq!(encoded["message"]["session"], "work");
+        assert_eq!(encoded["message"]["graph_session"], "ssh:a1b2:work");
+        assert_eq!(encoded["message"]["window_id"], 42);
     }
 
     fn assert_field_is_required<T>(state: T, field: &str)

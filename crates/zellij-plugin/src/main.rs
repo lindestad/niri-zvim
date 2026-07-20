@@ -4,6 +4,7 @@ use niri_zvim_core::{
     AdapterMessage, DaemonMessage, NeighborMap, ProtocolMessage, Rect, ZellijClient,
     ZellijClientState, directional_neighbors,
 };
+use niri_zvim_zellij::assigned_window_id;
 use zellij_tile::prelude::{
     Direction as ZellijDirection, Event, EventType, PaneManifest, PermissionStatus, PermissionType,
     PipeMessage, PipeSource, ZellijPlugin, block_cli_pipe_input, cli_pipe_output,
@@ -33,8 +34,10 @@ type PaneNeighbors = BTreeMap<String, NeighborMap<u32>>;
 struct Plugin {
     client_id: u16,
     session: Option<String>,
+    graph_session: Option<String>,
     client_ids: Vec<u16>,
     niri_window_ids: Vec<u64>,
+    direct_window_id: Option<u64>,
     revision: u64,
     pending_sequence: Option<u64>,
     pending_origin: Option<u32>,
@@ -157,6 +160,20 @@ impl Plugin {
                 window_ids.sort_unstable();
                 window_ids.dedup();
                 self.niri_window_ids = window_ids;
+                self.direct_window_id = None;
+                self.graph_session = Some(session.clone());
+                self.session = Some(session);
+                list_clients();
+                self.defer_publish();
+            }
+            DaemonMessage::ZellijSyncClient {
+                session,
+                graph_session,
+                window_id,
+            } => {
+                self.niri_window_ids.clear();
+                self.direct_window_id = Some(window_id);
+                self.graph_session = Some(graph_session);
                 self.session = Some(session);
                 list_clients();
                 self.defer_publish();
@@ -206,12 +223,19 @@ impl Plugin {
     }
 
     fn publish(&mut self) -> bool {
-        let (Some(pipe_id), Some(session)) = (self.pipe_id.clone(), self.session.clone()) else {
+        let (Some(pipe_id), Some(session), Some(graph_session)) = (
+            self.pipe_id.clone(),
+            self.session.clone(),
+            self.graph_session.clone(),
+        ) else {
             return false;
         };
-        let Some(niri_window_id) =
-            client_window_id(self.client_id, &self.client_ids, &self.niri_window_ids)
-        else {
+        let Some(niri_window_id) = assigned_window_id(
+            self.client_id,
+            self.direct_window_id,
+            &self.client_ids,
+            &self.niri_window_ids,
+        ) else {
             return false;
         };
         let Ok((tab, focused)) = get_focused_pane_info() else {
@@ -251,7 +275,7 @@ impl Plugin {
             AdapterMessage::ZellijSnapshot {
                 state: ZellijClientState {
                     client: ZellijClient {
-                        session,
+                        session: graph_session,
                         client_id: self.client_id,
                     },
                     niri_window_id,
@@ -265,14 +289,19 @@ impl Plugin {
     }
 
     fn publish_clients(&self) {
-        let (Some(pipe_id), Some(session)) = (&self.pipe_id, &self.session) else {
+        let (Some(pipe_id), Some(graph_session)) = (&self.pipe_id, &self.graph_session) else {
             return;
+        };
+        let client_ids = if self.direct_window_id.is_some() {
+            vec![self.client_id]
+        } else {
+            self.client_ids.clone()
         };
         Self::write_adapter(
             pipe_id,
             AdapterMessage::ZellijClients {
-                session: session.clone(),
-                client_ids: self.client_ids.clone(),
+                session: graph_session.clone(),
+                client_ids,
             },
         );
     }
@@ -320,17 +349,6 @@ impl Plugin {
                 .or_insert_with(|| pane_neighbors_for_layer(manifest, tab, floating)),
         )
     }
-}
-
-fn client_window_id(client_id: u16, client_ids: &[u16], window_ids: &[u64]) -> Option<u64> {
-    if client_ids.len() != window_ids.len() {
-        return None;
-    }
-    client_ids
-        .iter()
-        .position(|candidate| *candidate == client_id)
-        .and_then(|position| window_ids.get(position))
-        .copied()
 }
 
 fn pane_neighbors(
