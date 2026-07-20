@@ -55,6 +55,9 @@ pub(crate) enum DaemonEvent {
         message: AdapterMessage,
         sink: Sink,
     },
+    AdapterDisconnected {
+        sink: Sink,
+    },
     ZellijBridgeStopped {
         session: String,
     },
@@ -113,6 +116,7 @@ impl Daemon {
                 }
             }
             DaemonEvent::Adapter { message, sink } => self.update_adapter(message, sink),
+            DaemonEvent::AdapterDisconnected { sink } => self.disconnect_adapter(&sink),
             DaemonEvent::ZellijBridgeStopped { session } => {
                 self.zellij.retain(|client, _| client.session != session);
                 self.pending_zellij
@@ -357,6 +361,32 @@ impl Daemon {
             }
         }
     }
+
+    fn disconnect_adapter(&mut self, sink: &Sink) {
+        for id in remove_sink_owners(&mut self.nvim, sink) {
+            self.pending_nvim.remove(&id);
+            self.graph.remove_nvim(&id);
+        }
+        for client in remove_sink_owners(&mut self.zellij, sink) {
+            self.pending_zellij.remove(&client);
+            self.graph.remove_zellij(&client);
+        }
+    }
+}
+
+fn remove_sink_owners<K>(owners: &mut BTreeMap<K, Sink>, sink: &Sink) -> Vec<K>
+where
+    K: Ord + Clone,
+{
+    let removed: Vec<_> = owners
+        .iter()
+        .filter(|(_key, owner)| owner.same_channel(sink))
+        .map(|(key, _owner)| key.clone())
+        .collect();
+    for key in &removed {
+        owners.remove(key);
+    }
+    removed
 }
 
 pub async fn run_daemon() -> anyhow::Result<()> {
@@ -547,9 +577,11 @@ async fn handle_connection(
         }
     });
 
-    let read_result = read_adapter_messages(BufReader::new(reader), events, sink).await;
+    let read_result =
+        read_adapter_messages(BufReader::new(reader), events.clone(), sink.clone()).await;
     writer_task.abort();
     let _ = writer_task.await;
+    let _ = events.send(DaemonEvent::AdapterDisconnected { sink }).await;
     read_result
 }
 
@@ -748,6 +780,21 @@ mod tests {
 
         drop(reader);
         connection.await.unwrap().unwrap();
+        assert!(matches!(
+            received.recv().await,
+            Some(DaemonEvent::AdapterDisconnected { .. })
+        ));
+    }
+
+    #[test]
+    fn disconnected_adapter_cleanup_preserves_reconnected_owners() {
+        let (disconnected, _disconnected_messages) = mpsc::channel(1);
+        let (connected, _connected_messages) = mpsc::channel(1);
+        let mut owners =
+            BTreeMap::from([("old", disconnected.clone()), ("new", connected.clone())]);
+
+        assert_eq!(remove_sink_owners(&mut owners, &disconnected), vec!["old"]);
+        assert_eq!(owners.keys().copied().collect::<Vec<_>>(), vec!["new"]);
     }
 
     #[tokio::test]

@@ -65,6 +65,10 @@ impl NavigationGraph {
         });
     }
 
+    pub fn remove_zellij(&mut self, client: &ZellijClient) {
+        self.zellij.remove(client);
+    }
+
     pub fn update_nvim(&mut self, mut state: NvimInstance) {
         self.resolve_nvim_parent(&mut state);
         let accept = self
