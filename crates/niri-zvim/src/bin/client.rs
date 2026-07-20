@@ -1,4 +1,4 @@
-use std::{io::Write, os::unix::net::UnixStream};
+use std::{io::Write, os::unix::net::UnixStream, path::PathBuf, process::Command};
 
 use anyhow::Context;
 use niri_zvim::{Config, config_path, doctor_report, request_status, socket_path};
@@ -25,6 +25,7 @@ fn main() -> anyhow::Result<()> {
         ["config", "check", "--json"] => check_config(true),
         ["config", "show"] => show_config(false),
         ["config", "show", "--json"] => show_config(true),
+        ["uninstall", arguments @ ..] => uninstall(arguments),
         ["-V" | "--version"] => {
             println!("niri-zvim {}", env!("CARGO_PKG_VERSION"));
             Ok(())
@@ -42,6 +43,21 @@ fn navigate(direction: Direction) -> anyhow::Result<()> {
     let mut socket = UnixStream::connect(&path)
         .with_context(|| format!("could not connect to daemon at {}", path.display()))?;
     socket.write_all(&direction.control_frame())?;
+    Ok(())
+}
+
+fn uninstall(arguments: &[&str]) -> anyhow::Result<()> {
+    let data_home = std::env::var_os("XDG_DATA_HOME")
+        .filter(|path| !path.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".local/share")))
+        .context("HOME or XDG_DATA_HOME is required to locate the uninstaller")?;
+    let uninstaller = data_home.join("niri-zvim/uninstall");
+    let status = Command::new(&uninstaller)
+        .args(arguments)
+        .status()
+        .with_context(|| format!("could not run {}", uninstaller.display()))?;
+    anyhow::ensure!(status.success(), "uninstaller exited with {status}");
     Ok(())
 }
 
@@ -189,5 +205,5 @@ fn parent_name(parent: &NvimParent) -> String {
 }
 
 fn usage() -> &'static str {
-    "usage: niri-zvim <left|down|up|right|status [--json]|doctor [--json]|config <check|show> [--json]>"
+    "usage: niri-zvim <left|down|up|right|status [--json]|doctor [--json]|config <check|show> [--json]|uninstall [--yes] [--no-service]>"
 }

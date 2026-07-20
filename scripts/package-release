@@ -52,6 +52,7 @@ cargo build \
   --target wasm32-wasip1
 
 install -m 0755 "$project_dir/scripts/install" "$root/install"
+install -m 0755 "$project_dir/scripts/uninstall" "$root/uninstall"
 install -m 0644 "$project_dir/scripts/lib/install.sh" "$root/lib/install.sh"
 install -m 0644 "$project_dir/README.md" "$root/README.md"
 install -m 0644 "$project_dir/CHANGELOG.md" "$root/CHANGELOG.md"
@@ -65,6 +66,9 @@ install -m 0755 \
 install -m 0755 \
   "$project_dir/target/release-bundle/release/niri-zvim-zellij-bridge" \
   "$root/payload/bin/niri-zvim-zellij-bridge"
+install -m 0755 \
+  "$project_dir/target/release-bundle/release/niri-zvim-configure" \
+  "$root/payload/bin/niri-zvim-configure"
 install -m 0644 \
   "$project_dir/target/wasm32-wasip1/release/niri-zvim-zellij.wasm" \
   "$root/payload/zellij/niri-zvim.wasm"

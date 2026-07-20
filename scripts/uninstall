@@ -1,0 +1,86 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+config_home="${XDG_CONFIG_HOME:-$HOME/.config}"
+data_home="${XDG_DATA_HOME:-$HOME/.local/share}"
+state_home="${XDG_STATE_HOME:-$HOME/.local/state}"
+bin_dir="$HOME/.local/bin"
+zellij_plugin="$config_home/zellij/plugins/niri-zvim.wasm"
+nvim_site="$data_home/nvim/site"
+owned_data="$data_home/niri-zvim"
+systemd_unit="$config_home/systemd/user/niri-zvim.service"
+binding_state="$state_home/niri-zvim"
+assume_yes=false
+manage_service=true
+
+for argument in "$@"; do
+  case "$argument" in
+    --yes) assume_yes=true ;;
+    --no-service) manage_service=false ;;
+    *)
+      echo "usage: $0 [--yes] [--no-service]" >&2
+      exit 2
+      ;;
+  esac
+done
+
+if [[ "$assume_yes" == false ]]; then
+  printf 'Remove niri-zvim and restore installer-managed Niri bindings? [y/N] '
+  if ! read -r reply || [[ ! "$reply" =~ ^[Yy]([Ee][Ss])?$ ]]; then
+    echo "Uninstall cancelled."
+    exit 1
+  fi
+fi
+
+binding_manifest="$binding_state/niri-bindings.json"
+if [[ -f "$binding_manifest" ]]; then
+  configure="$bin_dir/niri-zvim-configure"
+  if [[ ! -x "$configure" ]]; then
+    echo "cannot restore Niri bindings: $configure is missing" >&2
+    exit 1
+  fi
+  if ! "$configure" restore-hjkl --state-dir "$binding_state"; then
+    echo "Uninstall stopped before removing files; resolve the binding backup warning first." >&2
+    exit 1
+  fi
+fi
+
+if [[ "$manage_service" == true ]] && command -v systemctl >/dev/null; then
+  systemctl --user disable --now niri-zvim.service >/dev/null 2>&1 || true
+fi
+
+remove_owned_link() {
+  local link="$1"
+  local target="$2"
+  if [[ -L "$link" && "$(readlink -f -- "$link")" == "$(readlink -f -- "$target")" ]]; then
+    unlink "$link"
+  fi
+}
+
+remove_owned_link \
+  "$nvim_site/lua/niri-zvim" \
+  "$owned_data/nvim/lua/niri-zvim"
+remove_owned_link \
+  "$nvim_site/plugin/niri-zvim.lua" \
+  "$owned_data/nvim/plugin/niri-zvim.lua"
+
+rm -f -- \
+  "$bin_dir/niri-zvim" \
+  "$bin_dir/niri-zvimd" \
+  "$bin_dir/niri-zvim-zellij-bridge" \
+  "$bin_dir/niri-zvim-configure" \
+  "$zellij_plugin" \
+  "$systemd_unit"
+rm -rf -- "$owned_data"
+
+if [[ "$manage_service" == true ]] && command -v systemctl >/dev/null; then
+  systemctl --user daemon-reload >/dev/null 2>&1 || true
+fi
+
+echo "Uninstalled niri-zvim."
+if [[ -f "$config_home/niri-zvim/config.json" ]]; then
+  echo "Preserved configuration: $config_home/niri-zvim/config.json"
+fi
+if [[ -d "$binding_state/backups" ]]; then
+  echo "Preserved Niri binding backups: $binding_state/backups"
+fi

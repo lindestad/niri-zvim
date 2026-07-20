@@ -1,6 +1,7 @@
 use std::{
     fs,
     io::{Read, Write},
+    os::unix::fs::PermissionsExt,
     os::unix::net::UnixListener,
     process::Command,
     thread,
@@ -53,6 +54,27 @@ fn zellij_bridge_requires_a_zellij_client() {
             .unwrap()
             .contains("ZELLIJ_SESSION_NAME is required")
     );
+}
+
+#[test]
+fn uninstall_dispatches_to_the_confirmation_gated_script() {
+    let temp = tempfile::tempdir().unwrap();
+    let data_home = temp.path().join("data");
+    let uninstaller = data_home.join("niri-zvim/uninstall");
+    fs::create_dir_all(uninstaller.parent().unwrap()).unwrap();
+    fs::write(
+        &uninstaller,
+        "#!/usr/bin/env bash\n[[ \"$*\" == \"--yes --no-service\" ]]\n",
+    )
+    .unwrap();
+    fs::set_permissions(&uninstaller, fs::Permissions::from_mode(0o700)).unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_niri-zvim"))
+        .args(["uninstall", "--yes", "--no-service"])
+        .env("XDG_DATA_HOME", data_home)
+        .output()
+        .unwrap();
+    assert!(output.status.success());
 }
 
 fn assert_version(name: &str, executable: &str) {

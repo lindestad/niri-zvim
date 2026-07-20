@@ -127,6 +127,8 @@ pub fn doctor_report() -> DoctorReport {
         },
     );
     check_neovim_adapter(&mut checks);
+    check_uninstaller(&mut checks);
+    check_managed_niri_bindings(&mut checks);
     check_terminal_configs(&mut checks);
     let healthy = checks.iter().all(|check| check.level != DoctorLevel::Fail);
     DoctorReport {
@@ -547,6 +549,47 @@ fn check_neovim_adapter(checks: &mut Vec<DoctorCheck>) {
     }
 }
 
+fn check_uninstaller(checks: &mut Vec<DoctorCheck>) {
+    let path = data_home().join("niri-zvim/uninstall");
+    match fs::metadata(&path) {
+        Ok(metadata) if metadata.is_file() && metadata.permissions().mode() & 0o111 != 0 => pass(
+            checks,
+            "uninstaller",
+            "niri-zvim uninstall is available and requires confirmation",
+        ),
+        Ok(_) => fail(
+            checks,
+            "uninstaller",
+            format!("{} is not executable", path.display()),
+        ),
+        Err(error) => fail(
+            checks,
+            "uninstaller",
+            format!("{}: {error}", path.display()),
+        ),
+    }
+}
+
+fn check_managed_niri_bindings(checks: &mut Vec<DoctorCheck>) {
+    let path = state_home().join("niri-zvim/niri-bindings.json");
+    if path.is_file() {
+        pass(
+            checks,
+            "niri bindings",
+            format!(
+                "Mod+H/J/K/L were installer-managed; restoration state is in {}",
+                path.display()
+            ),
+        );
+    } else {
+        pass(
+            checks,
+            "niri bindings",
+            "not installer-managed; uninstall will leave the Niri config unchanged",
+        );
+    }
+}
+
 fn check_service(checks: &mut Vec<DoctorCheck>, name: &str, unit: &str) {
     match command_output("systemctl", &["--user", "is-active", unit]) {
         Ok(output) if output.status.success() && output_text(&output).trim() == "active" => {
@@ -642,6 +685,14 @@ fn data_home() -> PathBuf {
         .filter(|path| !path.is_empty())
         .map(PathBuf::from)
         .or_else(|| env::var_os("HOME").map(|home| PathBuf::from(home).join(".local/share")))
+        .unwrap_or_else(|| PathBuf::from("."))
+}
+
+fn state_home() -> PathBuf {
+    env::var_os("XDG_STATE_HOME")
+        .filter(|path| !path.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| env::var_os("HOME").map(|home| PathBuf::from(home).join(".local/state")))
         .unwrap_or_else(|| PathBuf::from("."))
 }
 

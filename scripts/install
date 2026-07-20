@@ -18,25 +18,27 @@ fi
 source "$helper"
 config_home="${XDG_CONFIG_HOME:-$HOME/.config}"
 data_home="${XDG_DATA_HOME:-$HOME/.local/share}"
+state_home="${XDG_STATE_HOME:-$HOME/.local/state}"
 bin_dir="$HOME/.local/bin"
 zellij_plugin_dir="$config_home/zellij/plugins"
 nvim_site_dir="$data_home/nvim/site"
-nvim_install_dir="$data_home/niri-zvim/nvim"
+owned_data_dir="$data_home/niri-zvim"
+nvim_install_dir="$owned_data_dir/nvim"
 systemd_dir="$config_home/systemd/user"
 niri_zvim_config_dir="$config_home/niri-zvim"
 start_service=true
+replace_hjkl_binds=false
 
-if (($# > 1)); then
-  echo "usage: $0 [--no-service]" >&2
-  exit 2
-fi
-if (($# == 1)); then
-  if [[ "$1" != "--no-service" ]]; then
-    echo "usage: $0 [--no-service]" >&2
-    exit 2
-  fi
-  start_service=false
-fi
+for argument in "$@"; do
+  case "$argument" in
+    --no-service) start_service=false ;;
+    --replace-hjkl-binds) replace_hjkl_binds=true ;;
+    *)
+      echo "usage: $0 [--no-service] [--replace-hjkl-binds]" >&2
+      exit 2
+      ;;
+  esac
+done
 
 if [[ "$install_source" == source ]]; then
   command -v cargo >/dev/null || {
@@ -65,20 +67,24 @@ if [[ "$install_source" == source ]]; then
   client_source="$project_dir/target/native/release/niri-zvim"
   daemon_source="$project_dir/target/native/release/niri-zvimd"
   ssh_bridge_source="$project_dir/target/native/release/niri-zvim-zellij-bridge"
+  configure_source="$project_dir/target/native/release/niri-zvim-configure"
   zellij_source="$project_dir/target/wasm32-wasip1/release/niri-zvim-zellij.wasm"
   nvim_lua_source="$project_dir/nvim/lua/niri-zvim/init.lua"
   nvim_plugin_source="$project_dir/nvim/plugin/niri-zvim.lua"
   service_source="$project_dir/systemd/niri-zvim.service"
   config_source="$project_dir/config/config.json"
+  uninstall_source="$project_dir/scripts/uninstall"
 else
   client_source="$project_dir/payload/bin/niri-zvim"
   daemon_source="$project_dir/payload/bin/niri-zvimd"
   ssh_bridge_source="$project_dir/payload/bin/niri-zvim-zellij-bridge"
+  configure_source="$project_dir/payload/bin/niri-zvim-configure"
   zellij_source="$project_dir/payload/zellij/niri-zvim.wasm"
   nvim_lua_source="$project_dir/payload/nvim/lua/niri-zvim/init.lua"
   nvim_plugin_source="$project_dir/payload/nvim/plugin/niri-zvim.lua"
   service_source="$project_dir/payload/systemd/niri-zvim.service"
   config_source="$project_dir/payload/config/config.json"
+  uninstall_source="$project_dir/uninstall"
 fi
 
 mkdir -p \
@@ -93,10 +99,12 @@ mkdir -p \
 install -m 0755 "$client_source" "$bin_dir/niri-zvim"
 install -m 0755 "$daemon_source" "$bin_dir/niri-zvimd"
 install -m 0755 "$ssh_bridge_source" "$bin_dir/niri-zvim-zellij-bridge"
+install -m 0755 "$configure_source" "$bin_dir/niri-zvim-configure"
 install -m 0644 "$zellij_source" "$zellij_plugin_dir/niri-zvim.wasm"
 install -m 0644 "$nvim_lua_source" "$nvim_install_dir/lua/niri-zvim/init.lua"
 install -m 0644 "$nvim_plugin_source" "$nvim_install_dir/plugin/niri-zvim.lua"
 install -m 0644 "$service_source" "$systemd_dir/niri-zvim.service"
+install -m 0755 "$uninstall_source" "$owned_data_dir/uninstall"
 if [[ ! -e "$niri_zvim_config_dir/config.json" ]]; then
   install -m 0644 "$config_source" "$niri_zvim_config_dir/config.json"
 fi
@@ -106,6 +114,12 @@ replace_managed_symlink \
 replace_managed_symlink \
   "$nvim_install_dir/plugin/niri-zvim.lua" \
   "$nvim_site_dir/plugin/niri-zvim.lua"
+
+if [[ "$replace_hjkl_binds" == true ]]; then
+  "$bin_dir/niri-zvim-configure" install-hjkl \
+    --config "$config_home/niri/config.kdl" \
+    --state-dir "$state_home/niri-zvim"
+fi
 
 if [[ "$start_service" == true ]] && command -v systemctl >/dev/null &&
   systemctl --user show-environment >/dev/null 2>&1; then
@@ -119,4 +133,8 @@ fi
 echo "Installed niri-zvim."
 echo "Add 'require(\"niri-zvim\").setup()' to your Neovim configuration."
 echo "Approve the niri-zvim permission prompt when it first appears in Zellij."
+if [[ "$replace_hjkl_binds" == false ]]; then
+  echo "Add the niri-zvim directional binds to your Niri configuration."
+fi
 echo "Run 'niri-zvim doctor' to verify the complete integration."
+echo "Run 'niri-zvim uninstall' to remove it again."
