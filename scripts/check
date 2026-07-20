@@ -19,6 +19,7 @@ cargo clippy --package niri-zvim-zellij --target wasm32-wasip1 \
   --locked -- -D warnings
 
 shellcheck -x \
+  install.sh \
   scripts/bench \
   scripts/bench-live \
   scripts/check \

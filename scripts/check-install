@@ -101,3 +101,25 @@ HOME="$home" XDG_CONFIG_HOME="$config_home" XDG_DATA_HOME="$data_home" \
 [[ ! -e "$home/.local/bin/niri-zvim" ]]
 [[ ! -e "$data_home/niri-zvim" ]]
 [[ -f "$config_home/niri-zvim/config.json" ]]
+
+release_dir="$test_dir/releases/v0.3.0"
+release_root="$test_dir/release-root/niri-zvim-0.3.0-x86_64-unknown-linux-gnu"
+release_archive="$release_dir/niri-zvim-0.3.0-x86_64-unknown-linux-gnu.tar.gz"
+mkdir -p "$release_dir" "$release_root"
+cp -a "$bundle/." "$release_root/"
+tar --directory "$(dirname "$release_root")" \
+  --create --gzip --file "$release_archive" \
+  "$(basename "$release_root")"
+(
+  cd "$release_dir"
+  sha256sum "$(basename "$release_archive")" >"$(basename "$release_archive").sha256"
+)
+
+HOME="$home" XDG_CONFIG_HOME="$config_home" XDG_DATA_HOME="$data_home" \
+  XDG_STATE_HOME="$test_dir/state" \
+  NIRI_ZVIM_INSTALL_RELEASE_BASE="file://$release_dir" \
+  "$project_dir/install.sh" --version 0.3.0 --no-service >/dev/null
+[[ -x "$home/.local/bin/niri-zvim" ]]
+HOME="$home" XDG_CONFIG_HOME="$config_home" XDG_DATA_HOME="$data_home" \
+  XDG_STATE_HOME="$test_dir/state" \
+  "$data_home/niri-zvim/uninstall" --yes --no-service >/dev/null
