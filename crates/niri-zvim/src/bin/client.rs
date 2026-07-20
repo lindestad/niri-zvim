@@ -1,7 +1,9 @@
 use std::{io::Write, os::unix::net::UnixStream};
 
 use anyhow::Context;
-use niri_zvim::{Config, config_path, doctor_report, request_status, socket_path};
+use niri_zvim::{
+    Config, config_path, doctor_report, request_status, run_forwarded_bridge, socket_path,
+};
 use niri_zvim_core::{Direction, NvimParent};
 use serde::Serialize;
 
@@ -25,6 +27,7 @@ fn main() -> anyhow::Result<()> {
         ["config", "check", "--json"] => check_config(true),
         ["config", "show"] => show_config(false),
         ["config", "show", "--json"] => show_config(true),
+        ["zellij-bridge"] => run_forwarded_bridge(),
         ["-V" | "--version"] => {
             println!("niri-zvim {}", env!("CARGO_PKG_VERSION"));
             Ok(())
@@ -189,5 +192,5 @@ fn parent_name(parent: &NvimParent) -> String {
 }
 
 fn usage() -> &'static str {
-    "usage: niri-zvim <left|down|up|right|status [--json]|doctor [--json]|config <check|show> [--json]>"
+    "usage: niri-zvim <left|down|up|right|status [--json]|doctor [--json]|config <check|show> [--json]|zellij-bridge>"
 }

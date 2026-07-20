@@ -12,8 +12,11 @@ use crate::{config::ZellijDiscovery, daemon::DaemonEvent};
 use self::{bridge::run_bridge, metadata::session_socket_exists};
 
 mod bridge;
+mod forward;
 mod metadata;
 mod snapshot;
+
+pub use forward::run_forwarded_bridge;
 
 pub(crate) fn configured_plugin_path() -> std::path::PathBuf {
     metadata::plugin_path()

@@ -11,3 +11,4 @@ pub use control::request_status;
 pub use daemon::run_daemon;
 pub use doctor::{DoctorCheck, DoctorLevel, DoctorReport, doctor_report};
 pub use socket::socket_path;
+pub use zellij::run_forwarded_bridge;

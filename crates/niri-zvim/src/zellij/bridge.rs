@@ -161,7 +161,9 @@ pub(super) async fn run_bridge(
             };
             let sequence = match &message {
                 DaemonMessage::ZellijNavigate { sequence, .. } => Some(*sequence),
-                DaemonMessage::Navigate { .. } | DaemonMessage::ZellijSync { .. } => None,
+                DaemonMessage::Navigate { .. }
+                | DaemonMessage::ZellijSync { .. }
+                | DaemonMessage::ZellijSyncClient { .. } => None,
             };
             let Ok(mut encoded) = serde_json::to_vec(&ProtocolMessage::new(message)) else {
                 continue;
