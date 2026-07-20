@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- Add a standalone persistent bridge for navigating remote Zellij panes through
+  an SSH-forwarded local daemon socket without adding discovery or subprocess
+  work to the native keypress path.
+- Remove adapter-owned graph state when a forwarded or local adapter connection
+  closes, without disturbing a replacement connection.
+
 ## 0.3.0
 
 - Recognize Ghostty, Alacritty, Kitty, Foot/Footclient, and WezTerm by default

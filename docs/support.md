@@ -112,3 +112,17 @@ Neovim's user site.
 
 Configurable terminal discovery and multiple attached clients are supported
 within the identity assumptions above.
+
+## Forwarded SSH clients
+
+The unreleased SSH bridge supports a Zellij client whose Wayland terminal and
+niri daemon run on the SSH client while Zellij runs on the server. It requires
+an explicit OpenSSH Unix-socket remote forward and a foreground
+`niri-zvim-zellij-bridge` process inside the remote Zellij client. Both machines
+must have the matching native binary and Zellij plugin installed.
+
+The bridge binds at startup to the focused Niri window and keeps one persistent
+transport. Native discovery remains unchanged, and neither native nor forwarded
+keypresses start SSH or Zellij command-line processes. Remote Neovim instances
+nested inside the forwarded Zellij session are not yet included. Complete setup
+and operational limits are documented in [ssh.md](ssh.md).

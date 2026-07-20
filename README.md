@@ -34,10 +34,11 @@ with:
 
     just install
 
-The installer puts the client and daemon in `~/.local/bin`, the Zellij plugin
-in `~/.config/zellij/plugins`, and an owned copy of the Neovim adapter under
-`~/.local/share/niri-zvim`. It links that stable copy into Neovim's user site,
-so the source checkout can be removed afterward. It creates
+The installer puts the client, daemon, and SSH Zellij bridge in
+`~/.local/bin`, the Zellij plugin in `~/.config/zellij/plugins`, and an owned
+copy of the Neovim adapter under `~/.local/share/niri-zvim`. It links that
+stable copy into Neovim's user site, so the source checkout can be removed
+afterward. It creates
 `~/.config/niri-zvim/config.json` only when missing and starts the systemd user
 service. Pass `--no-service` to install the files without enabling or
 restarting the service.
@@ -46,10 +47,10 @@ GitHub release archives contain the same complete integration prebuilt for
 their named Linux target and do not require Rust. Extract an archive, verify
 its adjacent `.sha256` file, and run its `install` script.
 
-`cargo install --locked niri-zvim` installs only the native
-client and daemon. It does not install the Zellij WASM plugin, Neovim adapter,
-configuration, or service; the source or release-archive installer is the
-complete path.
+`cargo install --locked niri-zvim` installs only the native client, daemon,
+and SSH Zellij bridge. It does not install the Zellij WASM plugin, Neovim
+adapter, configuration, or service; the source or release-archive installer is
+the complete path.
 
 Enable the installed Neovim adapter explicitly in your configuration:
 
@@ -178,6 +179,13 @@ Zellij client IDs with Niri window IDs in creation order and targets the
 background plugin instance for the focused window. Each attached surface must
 therefore retain the session-bearing title described above; check status to
 see the resulting client-to-window bindings.
+
+An SSH-attached client cannot use same-machine session-socket discovery. The
+explicit `niri-zvim-zellij-bridge` command connects the remote plugin to the
+Niri-side daemon through an OpenSSH-forwarded Unix socket without adding SSH or
+discovery work to normal key handling. See
+[Zellij navigation over SSH](https://github.com/lindestad/niri-zvim/blob/main/docs/ssh.md)
+for setup, performance properties, and current limits.
 
 ## Status
 

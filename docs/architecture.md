@@ -8,6 +8,12 @@ need to be queried during normal key handling.
     Neovim Lua <-> Unix socket --------+        |
                                                +-> exactly one executor
 
+An SSH-attached Zellij plugin reaches the same adapter socket through one
+long-running remote bridge and an OpenSSH Unix-socket forward. It publishes the
+same cached client topology as a native bridge. Startup resolves and binds the
+focused Niri window once; no SSH command or remote discovery is added to the
+keypress path.
+
 For a focused Niri window containing Zellij and Neovim, routing checks the
 cached graph from the inside out:
 
@@ -52,7 +58,8 @@ Neovim command-line client. It is one three-byte Unix-socket write (control
 magic, protocol version, direction) followed by an in-memory graph transition.
 The daemon keeps a persistent Niri action socket,
 a persistent pipe per observed Zellij session, and a persistent socket per
-Neovim instance.
+Neovim instance. An optional SSH bridge is another persistent adapter socket,
+not a per-navigation command.
 
 Native control connections and adapter connections carry an exact protocol
 version in their binary prelude. Persistent Neovim and Zellij JSON messages are
