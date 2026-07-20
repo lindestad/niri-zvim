@@ -203,7 +203,6 @@ pub fn restore_hjkl_bindings(state_dir: &Path) -> anyhow::Result<BindingRestore>
         });
     }
     let manifest = read_manifest(&manifest_path)?;
-    let mut restored = Vec::new();
     let mut preserved = Vec::new();
 
     for file in &manifest.files {
@@ -218,8 +217,19 @@ pub fn restore_hjkl_bindings(state_dir: &Path) -> anyhow::Result<BindingRestore>
             .with_context(|| format!("could not read {}", file.installed.display()))?;
         if current_target != file.target_path || current != installed {
             preserved.push(file.logical_path.clone());
-            continue;
         }
+    }
+
+    if !preserved.is_empty() {
+        return Ok(BindingRestore {
+            restored: Vec::new(),
+            preserved,
+            backup: Some(manifest.backup),
+        });
+    }
+
+    let mut restored = Vec::new();
+    for file in &manifest.files {
         let original = fs::read(&file.original)
             .with_context(|| format!("could not read backup {}", file.original.display()))?;
         atomic_write(&file.target_path, &original)
@@ -227,10 +237,8 @@ pub fn restore_hjkl_bindings(state_dir: &Path) -> anyhow::Result<BindingRestore>
         restored.push(file.logical_path.clone());
     }
 
-    if preserved.is_empty() {
-        fs::remove_file(&manifest_path)
-            .with_context(|| format!("could not remove {}", manifest_path.display()))?;
-    }
+    fs::remove_file(&manifest_path)
+        .with_context(|| format!("could not remove {}", manifest_path.display()))?;
 
     Ok(BindingRestore {
         restored,
@@ -790,6 +798,43 @@ mod tests {
         assert!(restored.restored.is_empty());
         assert_eq!(restored.preserved, vec![config]);
         assert!(binding_manifest_path(&state).exists());
+    }
+
+    #[test]
+    fn restore_is_all_or_nothing_across_imported_files() {
+        let temp = tempfile::tempdir().unwrap();
+        let config = temp.path().join("config.kdl");
+        let horizontal = temp.path().join("horizontal.kdl");
+        let vertical = temp.path().join("vertical.kdl");
+        fs::write(
+            &config,
+            "include \"horizontal.kdl\"\ninclude \"vertical.kdl\"\n",
+        )
+        .unwrap();
+        fs::write(
+            &horizontal,
+            "binds {\n Mod+H { focus-column-left; }\n Mod+L { focus-column-right; }\n}\n",
+        )
+        .unwrap();
+        fs::write(
+            &vertical,
+            "binds {\n Mod+J { focus-window-down; }\n Mod+K { focus-window-up; }\n}\n",
+        )
+        .unwrap();
+        let state = temp.path().join("state");
+        install_hjkl_bindings(&config, &state).unwrap();
+        let installed_vertical = fs::read_to_string(&vertical).unwrap();
+        fs::OpenOptions::new()
+            .append(true)
+            .open(&horizontal)
+            .unwrap()
+            .write_all(b"// later user change\n")
+            .unwrap();
+
+        let restored = restore_hjkl_bindings(&state).unwrap();
+        assert!(restored.restored.is_empty());
+        assert_eq!(restored.preserved, vec![horizontal]);
+        assert_eq!(fs::read_to_string(vertical).unwrap(), installed_vertical);
     }
 
     #[test]
