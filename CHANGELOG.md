@@ -7,6 +7,11 @@
   work to the native keypress path.
 - Remove adapter-owned graph state when a forwarded or local adapter connection
   closes, without disturbing a replacement connection.
+- Add a checksum-verifying release bootstrap, an opt-in importer-aware
+  `Mod+H/J/K/L` installer with exact backups, and a confirmation-gated
+  uninstaller that safely restores managed bindings.
+- Rewrite the README around complete installation, Niri keybind variants,
+  navigation modes, verification, and troubleshooting.
 
 ## 0.3.0
 
