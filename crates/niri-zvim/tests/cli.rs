@@ -18,6 +18,10 @@ fn clients_report_the_package_version() {
         "niri-zvim-zellij-bridge",
         env!("CARGO_BIN_EXE_niri-zvim-zellij-bridge"),
     );
+    assert_version(
+        "niri-zvim-configure",
+        env!("CARGO_BIN_EXE_niri-zvim-configure"),
+    );
 }
 
 #[test]
